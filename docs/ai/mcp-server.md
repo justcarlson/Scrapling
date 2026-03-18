@@ -6,7 +6,7 @@ The **Scrapling MCP Server** is a new feature that brings Scrapling's powerful W
 
 ## Features
 
-The Scrapling MCP Server provides six powerful tools for web scraping:
+The Scrapling MCP Server provides eight powerful tools for web scraping:
 
 ### 🚀 Basic HTTP Scraping
 - **`get`**: Fast HTTP requests with browser fingerprint impersonation, generating real browser headers matching the TLS version, HTTP/3, and more!
@@ -20,9 +20,14 @@ The Scrapling MCP Server provides six powerful tools for web scraping:
 - **`stealthy_fetch`**: Uses our Stealthy browser to bypass Cloudflare Turnstile/Interstitial and other anti-bot systems with complete control over the request/browser! 
 - **`bulk_stealthy_fetch`**: An async version of the above tool that allows stealth scraping of multiple URLs in different browser tabs at the same time!
 
+### 🖼️ Image Delivery
+- **`list_page_images`**: Load a page and return matching image candidates with resolved URLs and metadata.
+- **`fetch_page_image`**: Load a page, download a matched image server-side, and return it as MCP image content.
+
 ### Key Capabilities
 - **Smart Content Extraction**: Convert web pages/elements to Markdown, HTML, or extract a clean version of the text content
 - **CSS Selector Support**: Use the Scrapling engine to target specific elements with precision before handing the content to the AI
+- **First-Class Image Results**: Return matched page images as MCP image content instead of forcing the client to fetch the asset separately
 - **Anti-Bot Bypass**: Handle Cloudflare Turnstile, Interstitial, and other protections
 - **Proxy Support**: Use proxies for anonymity and geo-targeting
 - **Browser Impersonation**: Mimic real browsers with TLS fingerprinting, real browser headers matching that version, and more
@@ -251,6 +256,15 @@ We will gradually go from simple prompts to more complex ones. We will use Claud
     Category URL:
     https://www.arnotts.ie/furniture/bedroom/bed-frames/
     ```
+
+7. **Return an image directly to the client**
+
+    If the website is protected and the final artifact you need is an image:
+    ```
+    Use fetch_page_image on https://example.com/help/article with src_contains set to '/article_attachments/' and return the first matched image.
+    ```
+
+    This keeps both the page fetch and image retrieval on the Scrapling server, then returns the image to the MCP client as first-class image content.
 
 And so on, you get the idea. Your creativity is the key here.
 

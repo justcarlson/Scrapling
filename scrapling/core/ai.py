@@ -1,6 +1,10 @@
+import base64
+import mimetypes
 from asyncio import gather
+from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import BaseModel, Field
 
 from scrapling.core.shell import Convertor
@@ -37,6 +41,28 @@ class ResponseModel(BaseModel):
     url: str = Field(description="The URL given by the user that resulted in this response.")
 
 
+class ImageCandidateModel(BaseModel):
+    """Page image metadata."""
+
+    index: int = Field(description="The zero-based index of the matched image in the filtered result set.")
+    src: str = Field(description="The raw src-like attribute extracted from the DOM.")
+    absolute_url: str = Field(description="The resolved absolute URL for the image asset.")
+    alt: Optional[str] = Field(default=None, description="The image alt text when present.")
+    title: Optional[str] = Field(default=None, description="The image title attribute when present.")
+    width: Optional[str] = Field(default=None, description="The image width attribute when present.")
+    height: Optional[str] = Field(default=None, description="The image height attribute when present.")
+
+
+class ImageCandidatesModel(BaseModel):
+    """List of image candidates found on a page."""
+
+    page_url: str = Field(description="The page URL that was inspected.")
+    strategy: str = Field(description="The fetching strategy used to inspect the page.")
+    css_selector: str = Field(description="The CSS selector used to match images.")
+    count: int = Field(description="The number of image candidates returned.")
+    images: list[ImageCandidateModel] = Field(description="The image candidates found on the page.")
+
+
 def _content_translator(content: Generator[str, None, None], page: _ScraplingResponse) -> ResponseModel:
     """Convert a content generator to a list of ResponseModel objects."""
     return ResponseModel(status=page.status, content=[result for result in content], url=page.url)
@@ -54,6 +80,55 @@ def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[Tu
         raise ValueError("Credentials dictionary must contain both 'username' and 'password' keys")
 
     return username, password
+
+
+def _extract_image_candidates(
+    page: _ScraplingResponse,
+    page_url: str,
+    css_selector: str,
+    src_contains: Optional[str],
+    max_results: int,
+) -> list[ImageCandidateModel]:
+    """Collect image candidates from a page response."""
+    results: list[ImageCandidateModel] = []
+    for element in page.css(css_selector):
+        if len(results) >= max_results:
+            break
+
+        src = (
+            element.attrib.get("src")
+            or element.attrib.get("data-src")
+            or element.attrib.get("data-original")
+        )
+        if not src:
+            continue
+
+        absolute_url = urljoin(page_url, src)
+        if src_contains and src_contains not in src and src_contains not in absolute_url:
+            continue
+
+        results.append(
+            ImageCandidateModel(
+                index=len(results),
+                src=src,
+                absolute_url=absolute_url,
+                alt=element.attrib.get("alt"),
+                title=element.attrib.get("title"),
+                width=element.attrib.get("width"),
+                height=element.attrib.get("height"),
+            )
+        )
+    return results
+
+
+def _detect_image_mimetype(asset_url: str, response: _ScraplingResponse) -> str:
+    """Resolve an image MIME type from response headers or the URL."""
+    header_value = (response.headers or {}).get("content-type", "")
+    mime_type = header_value.split(";", 1)[0].strip().lower()
+    if mime_type:
+        return mime_type
+    guessed_type, _ = mimetypes.guess_type(asset_url)
+    return guessed_type or "application/octet-stream"
 
 
 class ScraplingMCPServer:
@@ -594,6 +669,158 @@ class ScraplingMCPServer:
                 for page in responses
             ]
 
+    @staticmethod
+    async def list_page_images(
+        page_url: str,
+        strategy: str = "fetch",
+        css_selector: str = "img",
+        src_contains: Optional[str] = None,
+        max_results: int = 20,
+    ) -> ImageCandidatesModel:
+        """Load a page with Scrapling and list the image candidates that can be returned by MCP.
+
+        :param page_url: The page URL to inspect for image elements.
+        :param strategy: The fetching strategy to use. Options are:
+            - get: low-mid protection HTTP request
+            - fetch: browser-backed fetching
+            - stealthy_fetch: browser-backed fetching for high protection levels
+        :param css_selector: CSS selector used to match candidate images. Defaults to "img".
+        :param src_contains: Optional string that must be present in either the raw src or resolved image URL.
+        :param max_results: Maximum number of image candidates to return. Defaults to 20.
+        """
+        if strategy == "get":
+            page = Fetcher.get(page_url)
+        elif strategy == "fetch":
+            page = await DynamicFetcher.async_fetch(page_url)
+        elif strategy == "stealthy_fetch":
+            page = await StealthyFetcher.async_fetch(page_url)
+        else:
+            raise ValueError("Unsupported strategy. Use one of: get, fetch, stealthy_fetch")
+
+        candidates = _extract_image_candidates(page, page_url, css_selector, src_contains, max_results)
+        return ImageCandidatesModel(
+            page_url=page_url,
+            strategy=strategy,
+            css_selector=css_selector,
+            count=len(candidates),
+            images=candidates,
+        )
+
+    @staticmethod
+    async def fetch_page_image(
+        page_url: str,
+        strategy: str = "fetch",
+        css_selector: str = "img",
+        image_index: int = 0,
+        src_contains: Optional[str] = None,
+        max_results: int = 20,
+    ) -> CallToolResult:
+        """Load a page with Scrapling, download one matched image, and return it as MCP image content.
+
+        :param page_url: The page URL to inspect for image elements.
+        :param strategy: The fetching strategy to use. Options are:
+            - get: low-mid protection HTTP request
+            - fetch: browser-backed fetching
+            - stealthy_fetch: browser-backed fetching for high protection levels
+        :param css_selector: CSS selector used to match candidate images. Defaults to "img".
+        :param image_index: Zero-based index of the image candidate to fetch after filtering. Defaults to 0.
+        :param src_contains: Optional string that must be present in either the raw src or resolved image URL.
+        :param max_results: Maximum number of image candidates to consider. Defaults to 20.
+        """
+        candidates_result = await ScraplingMCPServer.list_page_images(
+            page_url=page_url,
+            strategy=strategy,
+            css_selector=css_selector,
+            src_contains=src_contains,
+            max_results=max_results,
+        )
+
+        if not candidates_result.images:
+            return CallToolResult(
+                isError=True,
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"No images matched css_selector={css_selector!r} on {page_url}",
+                    )
+                ],
+            )
+
+        if image_index < 0 or image_index >= len(candidates_result.images):
+            return CallToolResult(
+                isError=True,
+                content=[
+                    TextContent(
+                        type="text",
+                        text=(
+                            f"Requested image_index={image_index}, but only "
+                            f"{len(candidates_result.images)} candidates matched."
+                        ),
+                    )
+                ],
+            )
+
+        selected = candidates_result.images[image_index]
+        if strategy == "get":
+            asset = Fetcher.get(selected.absolute_url)
+        elif strategy == "fetch":
+            asset = await DynamicFetcher.async_fetch(selected.absolute_url)
+        else:
+            asset = await StealthyFetcher.async_fetch(selected.absolute_url)
+
+        body = asset.body or b""
+        if not isinstance(body, bytes):
+            return CallToolResult(
+                isError=True,
+                content=[
+                    TextContent(
+                        type="text",
+                        text="Scrapling did not return a raw byte payload for the selected asset.",
+                    )
+                ],
+            )
+        if not body:
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(type="text", text="The selected image returned an empty body.")],
+            )
+
+        mime_type = _detect_image_mimetype(selected.absolute_url, asset)
+        if not mime_type.startswith("image/"):
+            return CallToolResult(
+                isError=True,
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"Selected asset resolved to MIME type {mime_type!r}, not an image.",
+                    )
+                ],
+            )
+
+        encoded = base64.b64encode(body).decode("ascii")
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=(
+                        f"Fetched image {image_index} from {page_url}\n"
+                        f"Resolved URL: {selected.absolute_url}\n"
+                        f"MIME type: {mime_type}\n"
+                        f"Size: {len(body)} bytes"
+                    ),
+                ),
+                ImageContent(type="image", data=encoded, mimeType=mime_type),
+            ],
+            structuredContent={
+                "page_url": page_url,
+                "image_url": selected.absolute_url,
+                "strategy": strategy,
+                "mime_type": mime_type,
+                "bytes": len(body),
+                "candidate": selected.model_dump(),
+            },
+        )
+
     def serve(self, http: bool, host: str, port: int):
         """Serve the MCP server."""
         server = FastMCP(name="Scrapling", host=host, port=port)
@@ -611,5 +838,16 @@ class ScraplingMCPServer:
             title="bulk_stealthy_fetch",
             description=self.bulk_stealthy_fetch.__doc__,
             structured_output=True,
+        )
+        server.add_tool(
+            self.list_page_images,
+            title="list_page_images",
+            description=self.list_page_images.__doc__,
+            structured_output=True,
+        )
+        server.add_tool(
+            self.fetch_page_image,
+            title="fetch_page_image",
+            description=self.fetch_page_image.__doc__,
         )
         server.run(transport="stdio" if not http else "streamable-http")

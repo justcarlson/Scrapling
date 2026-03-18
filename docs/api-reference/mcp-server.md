@@ -5,7 +5,7 @@ search:
 
 # MCP Server API Reference
 
-The **Scrapling MCP Server** provides six powerful tools for web scraping through the Model Context Protocol (MCP). This server integrates Scrapling's capabilities directly into AI chatbots and agents, allowing conversational web scraping with advanced anti-bot bypass features.
+The **Scrapling MCP Server** provides eight powerful tools for web scraping through the Model Context Protocol (MCP). This server integrates Scrapling's capabilities directly into AI chatbots and agents, allowing conversational web scraping with advanced anti-bot bypass features and direct image-return workflows.
 
 You can start the MCP server by running:
 
@@ -27,6 +27,18 @@ server.serve(http=False, host="0.0.0.0", port=8000)
 The standardized response structure that's returned by all MCP server tools:
 
 ## ::: scrapling.core.ai.ResponseModel
+    handler: python
+    :docstring:
+
+## Image Candidate Models
+
+These structures are returned by the page-image listing tool:
+
+## ::: scrapling.core.ai.ImageCandidateModel
+    handler: python
+    :docstring:
+
+## ::: scrapling.core.ai.ImageCandidatesModel
     handler: python
     :docstring:
 
