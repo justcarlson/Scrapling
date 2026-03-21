@@ -33,6 +33,7 @@ class TestImageOperations:
 
         async def fake_fetch(url, **kwargs):
             assert url == "https://example.com/article"
+            assert kwargs == {"disable_resources": True, "timeout": 45_000}
             return page_response
 
         monkeypatch.setattr("scrapling.operations.images.DynamicFetcher.async_fetch", fake_fetch)
@@ -62,8 +63,10 @@ class TestImageOperations:
 
         async def fake_fetch(url, **kwargs):
             if url == "https://example.com/article":
+                assert kwargs == {"disable_resources": True, "timeout": 45_000}
                 return page_response
             if url == "https://example.com/hc/article_attachments/12345":
+                assert kwargs == {}
                 return image_response
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -80,3 +83,25 @@ class TestImageOperations:
         assert result.mime_type == "image/png"
         assert result.bytes_count == len(image_response.body)
         assert result.data == image_response.body
+
+    @pytest.mark.asyncio
+    async def test_list_page_images_stealthy_fetch_uses_browser_page_kwargs(self, monkeypatch):
+        page_response = DummyResponse(
+            url="https://example.com/article",
+            elements=[DummyElement({"src": "/hc/article_attachments/12345"})],
+        )
+
+        async def fake_fetch(url, **kwargs):
+            assert url == "https://example.com/article"
+            assert kwargs == {"disable_resources": True, "timeout": 45_000}
+            return page_response
+
+        monkeypatch.setattr("scrapling.operations.images.StealthyFetcher.async_fetch", fake_fetch)
+
+        result = await list_page_images(
+            page_url="https://example.com/article",
+            strategy="stealthy_fetch",
+            src_contains="/hc/article_attachments/",
+        )
+
+        assert result.count == 1
