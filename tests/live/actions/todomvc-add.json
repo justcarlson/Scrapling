@@ -1,0 +1,16 @@
+[
+  {
+    "type": "fill",
+    "selector": ".new-todo",
+    "value": "__LIVE_SMOKE_TODO__"
+  },
+  {
+    "type": "press",
+    "selector": ".new-todo",
+    "key": "Enter"
+  },
+  {
+    "type": "wait",
+    "timeout_ms": 500
+  }
+]
