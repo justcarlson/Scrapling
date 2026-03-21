@@ -1,7 +1,5 @@
 import base64
-import mimetypes
 from asyncio import gather
-from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent
@@ -31,6 +29,17 @@ from scrapling.core._types import (
     extraction_types,
     SelectorWaitStates,
 )
+from scrapling.operations.images import (
+    ImageCandidatesResult as SharedImageCandidatesResult,
+    fetch_page_image as fetch_page_image_operation,
+    list_page_images as list_page_images_operation,
+)
+from scrapling.operations.app_state import AppStateResult as SharedAppStateResult, extract_app_state as extract_app_state_operation
+from scrapling.operations.network import NetworkObservationResult as SharedNetworkObservationResult, observe_network as observe_network_operation
+from scrapling.operations.browser_flow import FlowExtractResult as SharedFlowExtractResult, run_flow_and_extract as run_flow_and_extract_operation
+from scrapling.operations.debug import PageDebugResult as SharedPageDebugResult, debug_page as debug_page_operation
+from scrapling.operations.storage_state import StorageStateResult as SharedStorageStateResult, export_storage_state as export_storage_state_operation
+from scrapling.operations.discover_endpoints import EndpointDiscoveryResult as SharedEndpointDiscoveryResult, discover_endpoints as discover_endpoints_operation
 
 
 class ResponseModel(BaseModel):
@@ -63,6 +72,147 @@ class ImageCandidatesModel(BaseModel):
     images: list[ImageCandidateModel] = Field(description="The image candidates found on the page.")
 
 
+class AppStateEntryModel(BaseModel):
+    """Extracted app state blob."""
+
+    kind: str = Field(description="Detected app-state kind, such as next_data or json_ld.")
+    key: str = Field(description="Stable key for the extracted state blob.")
+    selector: str = Field(description="CSS selector used to locate the state blob.")
+    data: Any = Field(description="The parsed JSON payload.")
+
+
+class AppStateResultModel(BaseModel):
+    """Extracted application state payloads from a page."""
+
+    page_url: str = Field(description="The page URL that was inspected.")
+    strategy: str = Field(description="The fetching strategy used to inspect the page.")
+    count: int = Field(description="The number of parsed state payloads returned.")
+    states: list[AppStateEntryModel] = Field(description="The parsed state payloads.")
+
+
+class NetworkEntryModel(BaseModel):
+    """Observed network request/response record."""
+
+    index: int = Field(description="Zero-based observation index.")
+    url: str = Field(description="Observed request URL.")
+    method: str = Field(description="HTTP method used by the request.")
+    resource_type: str = Field(description="Playwright resource type for the request.")
+    status: Optional[int] = Field(default=None, description="HTTP response status when available.")
+    content_type: Optional[str] = Field(default=None, description="Response content type when available.")
+    stage: str = Field(description="Observation stage: requested, responded, or failed.")
+    failure_text: Optional[str] = Field(default=None, description="Failure reason when the request failed.")
+    request_post_data: Optional[str] = Field(default=None, description="Request body when captured.")
+    response_preview: Optional[Any] = Field(default=None, description="Parsed or trimmed response preview when captured.")
+    request_headers: Optional[Dict[str, str]] = Field(default=None, description="Request headers when captured.")
+    response_headers: Optional[Dict[str, str]] = Field(default=None, description="Response headers when captured.")
+
+
+class NetworkObservationResultModel(BaseModel):
+    """Observed network activity during a browser-backed fetch."""
+
+    page_url: str = Field(description="The page URL that was observed.")
+    strategy: str = Field(description="The browser-backed strategy used for observation.")
+    count: int = Field(description="The number of observed network entries returned.")
+    entries: list[NetworkEntryModel] = Field(description="The observed network entries.")
+
+
+class FlowActionRecordModel(BaseModel):
+    """Executed browser-flow action record."""
+
+    index: int = Field(description="Zero-based action index.")
+    type: str = Field(description="Action type that was executed.")
+    status: str = Field(description="Execution status for the action.")
+    details: Dict[str, Any] = Field(description="Action-specific execution details.")
+
+
+class FlowExtractResultModel(BaseModel):
+    """Result of running a declarative browser flow and extracting page content."""
+
+    page_url: str = Field(description="The initial page URL.")
+    final_url: str = Field(description="The final browser URL after the flow completed.")
+    strategy: str = Field(description="The browser-backed strategy used for the flow.")
+    extraction_type: str = Field(description="The extraction type used for the final content.")
+    css_selector: Optional[str] = Field(default=None, description="Optional CSS selector used for final extraction.")
+    content: list[str] = Field(description="The extracted final content.")
+    actions: list[FlowActionRecordModel] = Field(description="The executed browser-flow actions.")
+    network: list[NetworkEntryModel] = Field(default_factory=list, description="Observed network entries captured during the flow.")
+
+
+class RedirectEntryModel(BaseModel):
+    """Observed redirect hop before the final page response."""
+
+    index: int = Field(description="Zero-based redirect index.")
+    url: str = Field(description="Redirect request URL.")
+    status: Optional[int] = Field(default=None, description="HTTP status observed for the redirect response.")
+
+
+class PageDebugResultModel(BaseModel):
+    """Diagnostic summary for a browser-backed page load."""
+
+    page_url: str = Field(description="The initial page URL.")
+    final_url: str = Field(description="The final browser URL after navigation completed.")
+    strategy: str = Field(description="The browser-backed strategy used for the page load.")
+    status: Optional[int] = Field(default=None, description="HTTP status of the final page response when available.")
+    title: Optional[str] = Field(default=None, description="Final document title when available.")
+    ready_state: Optional[str] = Field(default=None, description="Final document.readyState value when available.")
+    challenge_detected: Optional[str] = Field(default=None, description="Detected Cloudflare challenge type when present.")
+    redirect_chain: list[RedirectEntryModel] = Field(default_factory=list, description="Redirect hops observed before the final page response.")
+    page_errors: list[str] = Field(default_factory=list, description="Unhandled page errors raised during navigation.")
+    failed_requests: list[NetworkEntryModel] = Field(default_factory=list, description="Failed network requests observed during navigation.")
+    network_count: int = Field(description="Total observed network entries during navigation.")
+
+
+class StorageOriginEntryModel(BaseModel):
+    """Local storage snapshot for one origin in the browser context."""
+
+    origin: str = Field(description="Origin URL for the stored entries.")
+    local_storage: Dict[str, str] = Field(description="Local storage entries recorded for the origin.")
+
+
+class StorageStateResultModel(BaseModel):
+    """Structured browser storage snapshot for a page."""
+
+    page_url: str = Field(description="The initial page URL.")
+    final_url: str = Field(description="The final browser URL after navigation completed.")
+    strategy: str = Field(description="The browser-backed strategy used for the page load.")
+    cookies: list[Dict[str, Any]] = Field(description="Cookies currently visible to the browser context.")
+    local_storage: Dict[str, str] = Field(description="Current page localStorage snapshot.")
+    session_storage: Dict[str, str] = Field(description="Current page sessionStorage snapshot.")
+    origins: list[StorageOriginEntryModel] = Field(description="Context storage_state origins, including localStorage entries.")
+
+
+class GraphQLOperationModel(BaseModel):
+    """GraphQL operation discovered during browser-side endpoint observation."""
+
+    name: str = Field(description="GraphQL operation name.")
+    endpoint_url: str = Field(description="Endpoint URL used by the operation.")
+    method: str = Field(description="HTTP method used by the operation.")
+
+
+class DiscoveredEndpointModel(BaseModel):
+    """Summarized API-like endpoint discovered from observed browser traffic."""
+
+    url: str = Field(description="Discovered endpoint URL.")
+    method: str = Field(description="HTTP method used by the endpoint.")
+    kind: str = Field(description="Endpoint kind, such as api, graphql, or websocket.")
+    resource_type: str = Field(description="Underlying Playwright resource type.")
+    status: Optional[int] = Field(default=None, description="Observed HTTP status when available.")
+    content_type: Optional[str] = Field(default=None, description="Observed content type when available.")
+    graphql_operation_names: Optional[list[str]] = Field(default=None, description="Discovered GraphQL operation names for this endpoint.")
+
+
+class EndpointDiscoveryResultModel(BaseModel):
+    """Structured endpoint inventory discovered from browser-side traffic."""
+
+    page_url: str = Field(description="The initial page URL.")
+    final_url: str = Field(description="The final browser URL after discovery completed.")
+    strategy: str = Field(description="The browser-backed strategy used for discovery.")
+    count: int = Field(description="The number of unique endpoints returned.")
+    endpoints: list[DiscoveredEndpointModel] = Field(description="The discovered endpoints.")
+    graphql_operations: list[GraphQLOperationModel] = Field(description="Discovered GraphQL operations.")
+    websocket_urls: list[str] = Field(description="Discovered WebSocket URLs.")
+
+
 def _content_translator(content: Generator[str, None, None], page: _ScraplingResponse) -> ResponseModel:
     """Convert a content generator to a list of ResponseModel objects."""
     return ResponseModel(status=page.status, content=[result for result in content], url=page.url)
@@ -80,57 +230,6 @@ def _normalize_credentials(credentials: Optional[Dict[str, str]]) -> Optional[Tu
         raise ValueError("Credentials dictionary must contain both 'username' and 'password' keys")
 
     return username, password
-
-
-def _extract_image_candidates(
-    page: _ScraplingResponse,
-    page_url: str,
-    css_selector: str,
-    src_contains: Optional[str],
-    max_results: int,
-) -> list[ImageCandidateModel]:
-    """Collect image candidates from a page response."""
-    results: list[ImageCandidateModel] = []
-    for element in page.css(css_selector):
-        if len(results) >= max_results:
-            break
-
-        src = (
-            element.attrib.get("src")
-            or element.attrib.get("data-src")
-            or element.attrib.get("data-original")
-        )
-        if not src:
-            continue
-
-        absolute_url = urljoin(page_url, src)
-        if src_contains and src_contains not in src and src_contains not in absolute_url:
-            continue
-
-        results.append(
-            ImageCandidateModel(
-                index=len(results),
-                src=src,
-                absolute_url=absolute_url,
-                alt=element.attrib.get("alt"),
-                title=element.attrib.get("title"),
-                width=element.attrib.get("width"),
-                height=element.attrib.get("height"),
-            )
-        )
-    return results
-
-
-def _detect_image_mimetype(asset_url: str, response: _ScraplingResponse) -> str:
-    """Resolve an image MIME type from response headers or the URL."""
-    header_value = (response.headers or {}).get("content-type", "")
-    mime_type = header_value.split(";", 1)[0].strip().lower()
-    if mime_type:
-        return mime_type
-    guessed_type, _ = mimetypes.guess_type(asset_url)
-    return guessed_type or "application/octet-stream"
-
-
 class ScraplingMCPServer:
     @staticmethod
     def get(
@@ -688,22 +787,19 @@ class ScraplingMCPServer:
         :param src_contains: Optional string that must be present in either the raw src or resolved image URL.
         :param max_results: Maximum number of image candidates to return. Defaults to 20.
         """
-        if strategy == "get":
-            page = Fetcher.get(page_url)
-        elif strategy == "fetch":
-            page = await DynamicFetcher.async_fetch(page_url)
-        elif strategy == "stealthy_fetch":
-            page = await StealthyFetcher.async_fetch(page_url)
-        else:
-            raise ValueError("Unsupported strategy. Use one of: get, fetch, stealthy_fetch")
-
-        candidates = _extract_image_candidates(page, page_url, css_selector, src_contains, max_results)
-        return ImageCandidatesModel(
+        result: SharedImageCandidatesResult = await list_page_images_operation(
             page_url=page_url,
             strategy=strategy,
             css_selector=css_selector,
-            count=len(candidates),
-            images=candidates,
+            src_contains=src_contains,
+            max_results=max_results,
+        )
+        return ImageCandidatesModel(
+            page_url=result.page_url,
+            strategy=result.strategy,
+            css_selector=result.css_selector,
+            count=result.count,
+            images=[ImageCandidateModel(**candidate.to_dict()) for candidate in result.images],
         )
 
     @staticmethod
@@ -727,98 +823,478 @@ class ScraplingMCPServer:
         :param src_contains: Optional string that must be present in either the raw src or resolved image URL.
         :param max_results: Maximum number of image candidates to consider. Defaults to 20.
         """
-        candidates_result = await ScraplingMCPServer.list_page_images(
-            page_url=page_url,
-            strategy=strategy,
-            css_selector=css_selector,
-            src_contains=src_contains,
-            max_results=max_results,
-        )
-
-        if not candidates_result.images:
+        try:
+            result = await fetch_page_image_operation(
+                page_url=page_url,
+                strategy=strategy,
+                css_selector=css_selector,
+                image_index=image_index,
+                src_contains=src_contains,
+                max_results=max_results,
+            )
+        except (TypeError, ValueError) as exc:
             return CallToolResult(
                 isError=True,
                 content=[
                     TextContent(
                         type="text",
-                        text=f"No images matched css_selector={css_selector!r} on {page_url}",
+                        text=str(exc),
                     )
                 ],
             )
 
-        if image_index < 0 or image_index >= len(candidates_result.images):
-            return CallToolResult(
-                isError=True,
-                content=[
-                    TextContent(
-                        type="text",
-                        text=(
-                            f"Requested image_index={image_index}, but only "
-                            f"{len(candidates_result.images)} candidates matched."
-                        ),
-                    )
-                ],
-            )
-
-        selected = candidates_result.images[image_index]
-        if strategy == "get":
-            asset = Fetcher.get(selected.absolute_url)
-        elif strategy == "fetch":
-            asset = await DynamicFetcher.async_fetch(selected.absolute_url)
-        else:
-            asset = await StealthyFetcher.async_fetch(selected.absolute_url)
-
-        body = asset.body or b""
-        if not isinstance(body, bytes):
-            return CallToolResult(
-                isError=True,
-                content=[
-                    TextContent(
-                        type="text",
-                        text="Scrapling did not return a raw byte payload for the selected asset.",
-                    )
-                ],
-            )
-        if not body:
-            return CallToolResult(
-                isError=True,
-                content=[TextContent(type="text", text="The selected image returned an empty body.")],
-            )
-
-        mime_type = _detect_image_mimetype(selected.absolute_url, asset)
-        if not mime_type.startswith("image/"):
-            return CallToolResult(
-                isError=True,
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"Selected asset resolved to MIME type {mime_type!r}, not an image.",
-                    )
-                ],
-            )
-
-        encoded = base64.b64encode(body).decode("ascii")
+        encoded = base64.b64encode(result.data).decode("ascii")
         return CallToolResult(
             content=[
                 TextContent(
                     type="text",
                     text=(
                         f"Fetched image {image_index} from {page_url}\n"
-                        f"Resolved URL: {selected.absolute_url}\n"
-                        f"MIME type: {mime_type}\n"
-                        f"Size: {len(body)} bytes"
+                        f"Resolved URL: {result.image_url}\n"
+                        f"MIME type: {result.mime_type}\n"
+                        f"Size: {result.bytes_count} bytes"
                     ),
                 ),
-                ImageContent(type="image", data=encoded, mimeType=mime_type),
+                ImageContent(type="image", data=encoded, mimeType=result.mime_type),
             ],
-            structuredContent={
-                "page_url": page_url,
-                "image_url": selected.absolute_url,
-                "strategy": strategy,
-                "mime_type": mime_type,
-                "bytes": len(body),
-                "candidate": selected.model_dump(),
-            },
+            structuredContent=result.metadata_dict(),
+        )
+
+    @staticmethod
+    async def extract_app_state(
+        page_url: str,
+        strategy: str = "fetch",
+        kinds: Optional[List[str]] = None,
+    ) -> AppStateResultModel:
+        """Fetch a page server-side and extract app-state payloads as parsed JSON.
+
+        :param page_url: The page URL to inspect.
+        :param strategy: The fetching strategy to use. Options are:
+            - get: low-mid protection HTTP request
+            - fetch: browser-backed fetching
+            - stealthy_fetch: browser-backed fetching for high protection levels
+        :param kinds: Optional list of state kinds to extract. Supported values are:
+            - next_data
+            - nuxt_data
+            - json_ld
+            - application_json
+        """
+        result: SharedAppStateResult = await extract_app_state_operation(
+            page_url=page_url,
+            strategy=strategy,
+            kinds=kinds,
+        )
+        return AppStateResultModel(
+            page_url=result.page_url,
+            strategy=result.strategy,
+            count=result.count,
+            states=[AppStateEntryModel(**state.to_dict()) for state in result.states],
+        )
+
+    @staticmethod
+    async def observe_network(
+        page_url: str,
+        strategy: str = "fetch",
+        headless: bool = True,
+        google_search: bool = True,
+        real_chrome: bool = False,
+        wait: int | float = 0,
+        proxy: Optional[str | Dict[str, str]] = None,
+        timezone_id: str | None = None,
+        locale: str | None = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
+        cdp_url: Optional[str] = None,
+        timeout: int | float = 30000,
+        disable_resources: bool = False,
+        wait_selector: Optional[str] = None,
+        cookies: Sequence[SetCookieParam] | None = None,
+        network_idle: bool = True,
+        wait_selector_state: SelectorWaitStates = "attached",
+        block_webrtc: bool = False,
+        allow_webgl: bool = True,
+        solve_cloudflare: bool = False,
+        additional_args: Optional[Dict] = None,
+        hide_canvas: bool = False,
+        include_headers: bool = False,
+        include_bodies: bool = False,
+        max_entries: int = 100,
+        max_body_chars: int = 2000,
+        url_contains: Optional[str] = None,
+    ) -> NetworkObservationResultModel:
+        """Observe browser-side network activity for a page and return structured request/response records.
+
+        :param page_url: The page URL to observe.
+        :param strategy: Browser-backed strategy to use. Options are:
+            - fetch
+            - stealthy_fetch
+        :param include_headers: Include captured request and response headers in the result.
+        :param include_bodies: Include parsed or trimmed textual response previews when possible.
+        :param max_entries: Maximum number of observed requests to return.
+        :param max_body_chars: Maximum preview length for textual response bodies.
+        :param url_contains: Optional substring filter applied to observed request URLs.
+        """
+        result: SharedNetworkObservationResult = await observe_network_operation(
+            page_url=page_url,
+            strategy=strategy,
+            headless=headless,
+            google_search=google_search,
+            real_chrome=real_chrome,
+            wait=wait,
+            proxy=proxy,
+            timezone_id=timezone_id,
+            locale=locale,
+            extra_headers=extra_headers,
+            useragent=useragent,
+            cdp_url=cdp_url,
+            timeout=timeout,
+            disable_resources=disable_resources,
+            wait_selector=wait_selector,
+            cookies=cookies,
+            network_idle=network_idle,
+            wait_selector_state=wait_selector_state,
+            block_webrtc=block_webrtc,
+            allow_webgl=allow_webgl,
+            solve_cloudflare=solve_cloudflare,
+            additional_args=additional_args,
+            hide_canvas=hide_canvas,
+            include_headers=include_headers,
+            include_bodies=include_bodies,
+            max_entries=max_entries,
+            max_body_chars=max_body_chars,
+            url_contains=url_contains,
+        )
+        return NetworkObservationResultModel(
+            page_url=result.page_url,
+            strategy=result.strategy,
+            count=result.count,
+            entries=[NetworkEntryModel(**entry.to_dict()) for entry in result.entries],
+        )
+
+    @staticmethod
+    async def run_flow_and_extract(
+        page_url: str,
+        actions: List[Dict[str, Any]],
+        strategy: str = "fetch",
+        extraction_type: extraction_types = "markdown",
+        css_selector: Optional[str] = None,
+        main_content_only: bool = True,
+        headless: bool = True,
+        google_search: bool = True,
+        real_chrome: bool = False,
+        wait: int | float = 0,
+        proxy: Optional[str | Dict[str, str]] = None,
+        timezone_id: str | None = None,
+        locale: str | None = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
+        cdp_url: Optional[str] = None,
+        timeout: int | float = 30000,
+        disable_resources: bool = False,
+        wait_selector: Optional[str] = None,
+        cookies: Sequence[SetCookieParam] | None = None,
+        network_idle: bool = True,
+        wait_selector_state: SelectorWaitStates = "attached",
+        block_webrtc: bool = False,
+        allow_webgl: bool = True,
+        solve_cloudflare: bool = False,
+        additional_args: Optional[Dict] = None,
+        hide_canvas: bool = False,
+        observe_network: bool = False,
+        include_headers: bool = False,
+        include_bodies: bool = False,
+        max_entries: int = 100,
+        max_body_chars: int = 2000,
+        url_contains: Optional[str] = None,
+    ) -> FlowExtractResultModel:
+        """Run a declarative browser flow and then extract the final page content.
+
+        :param page_url: The initial page URL.
+        :param actions: A list of browser actions. Supported action types are:
+            - click
+            - wait
+            - wait_for_selector
+            - fill
+            - press
+            - scroll
+            - evaluate
+        :param strategy: Browser-backed strategy to use. Options are:
+            - fetch
+            - stealthy_fetch
+        :param observe_network: Capture request/response activity triggered during the flow in the same browser session.
+        :param include_headers: Include captured request and response headers when network observation is enabled.
+        :param include_bodies: Include parsed or trimmed textual response previews when network observation is enabled.
+        :param max_entries: Maximum number of observed requests to return when network observation is enabled.
+        :param max_body_chars: Maximum preview length for textual response bodies when network observation is enabled.
+        :param url_contains: Optional substring filter applied to observed request URLs when network observation is enabled.
+        """
+        result: SharedFlowExtractResult = await run_flow_and_extract_operation(
+            page_url=page_url,
+            actions=actions,
+            strategy=strategy,
+            extraction_type=extraction_type,
+            css_selector=css_selector,
+            main_content_only=main_content_only,
+            headless=headless,
+            google_search=google_search,
+            real_chrome=real_chrome,
+            wait=wait,
+            proxy=proxy,
+            timezone_id=timezone_id,
+            locale=locale,
+            extra_headers=extra_headers,
+            useragent=useragent,
+            cdp_url=cdp_url,
+            timeout=timeout,
+            disable_resources=disable_resources,
+            wait_selector=wait_selector,
+            cookies=cookies,
+            network_idle=network_idle,
+            wait_selector_state=wait_selector_state,
+            block_webrtc=block_webrtc,
+            allow_webgl=allow_webgl,
+            solve_cloudflare=solve_cloudflare,
+            additional_args=additional_args,
+            hide_canvas=hide_canvas,
+            observe_network=observe_network,
+            include_headers=include_headers,
+            include_bodies=include_bodies,
+            max_entries=max_entries,
+            max_body_chars=max_body_chars,
+            url_contains=url_contains,
+        )
+        return FlowExtractResultModel(
+            page_url=result.page_url,
+            final_url=result.final_url,
+            strategy=result.strategy,
+            extraction_type=result.extraction_type,
+            css_selector=result.css_selector,
+            content=result.content,
+            actions=[FlowActionRecordModel(**action.to_dict()) for action in result.actions],
+            network=[NetworkEntryModel(**entry.to_dict()) for entry in result.network],
+        )
+
+    @staticmethod
+    async def debug_page(
+        page_url: str,
+        strategy: str = "fetch",
+        headless: bool = True,
+        google_search: bool = True,
+        real_chrome: bool = False,
+        wait: int | float = 0,
+        proxy: Optional[str | Dict[str, str]] = None,
+        timezone_id: str | None = None,
+        locale: str | None = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
+        cdp_url: Optional[str] = None,
+        timeout: int | float = 30000,
+        disable_resources: bool = False,
+        wait_selector: Optional[str] = None,
+        cookies: Sequence[SetCookieParam] | None = None,
+        network_idle: bool = True,
+        wait_selector_state: SelectorWaitStates = "attached",
+        block_webrtc: bool = False,
+        allow_webgl: bool = True,
+        solve_cloudflare: bool = False,
+        additional_args: Optional[Dict] = None,
+        hide_canvas: bool = False,
+        max_entries: int = 100,
+    ) -> PageDebugResultModel:
+        """Load a page in the browser and return a compact diagnostic summary for debugging failures.
+
+        :param page_url: The page URL to inspect.
+        :param strategy: Browser-backed strategy to use. Options are:
+            - fetch
+            - stealthy_fetch
+        :param max_entries: Maximum number of observed network requests to track while collecting diagnostics.
+        """
+        result: SharedPageDebugResult = await debug_page_operation(
+            page_url=page_url,
+            strategy=strategy,
+            headless=headless,
+            google_search=google_search,
+            real_chrome=real_chrome,
+            wait=wait,
+            proxy=proxy,
+            timezone_id=timezone_id,
+            locale=locale,
+            extra_headers=extra_headers,
+            useragent=useragent,
+            cdp_url=cdp_url,
+            timeout=timeout,
+            disable_resources=disable_resources,
+            wait_selector=wait_selector,
+            cookies=cookies,
+            network_idle=network_idle,
+            wait_selector_state=wait_selector_state,
+            block_webrtc=block_webrtc,
+            allow_webgl=allow_webgl,
+            solve_cloudflare=solve_cloudflare,
+            additional_args=additional_args,
+            hide_canvas=hide_canvas,
+            max_entries=max_entries,
+        )
+        return PageDebugResultModel(
+            page_url=result.page_url,
+            final_url=result.final_url,
+            strategy=result.strategy,
+            status=result.status,
+            title=result.title,
+            ready_state=result.ready_state,
+            challenge_detected=result.challenge_detected,
+            redirect_chain=[RedirectEntryModel(**entry.to_dict()) for entry in result.redirect_chain],
+            page_errors=result.page_errors,
+            failed_requests=[NetworkEntryModel(**entry.to_dict()) for entry in result.failed_requests],
+            network_count=result.network_count,
+        )
+
+    @staticmethod
+    async def export_storage_state(
+        page_url: str,
+        strategy: str = "fetch",
+        headless: bool = True,
+        google_search: bool = True,
+        real_chrome: bool = False,
+        wait: int | float = 0,
+        proxy: Optional[str | Dict[str, str]] = None,
+        timezone_id: str | None = None,
+        locale: str | None = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
+        cdp_url: Optional[str] = None,
+        timeout: int | float = 30000,
+        disable_resources: bool = False,
+        wait_selector: Optional[str] = None,
+        cookies: Sequence[SetCookieParam] | None = None,
+        network_idle: bool = True,
+        wait_selector_state: SelectorWaitStates = "attached",
+        block_webrtc: bool = False,
+        allow_webgl: bool = True,
+        solve_cloudflare: bool = False,
+        additional_args: Optional[Dict] = None,
+        hide_canvas: bool = False,
+    ) -> StorageStateResultModel:
+        """Load a page in the browser and return cookies plus web-storage state for persistence.
+
+        :param page_url: The page URL to inspect.
+        :param strategy: Browser-backed strategy to use. Options are:
+            - fetch
+            - stealthy_fetch
+        """
+        result: SharedStorageStateResult = await export_storage_state_operation(
+            page_url=page_url,
+            strategy=strategy,
+            headless=headless,
+            google_search=google_search,
+            real_chrome=real_chrome,
+            wait=wait,
+            proxy=proxy,
+            timezone_id=timezone_id,
+            locale=locale,
+            extra_headers=extra_headers,
+            useragent=useragent,
+            cdp_url=cdp_url,
+            timeout=timeout,
+            disable_resources=disable_resources,
+            wait_selector=wait_selector,
+            cookies=cookies,
+            network_idle=network_idle,
+            wait_selector_state=wait_selector_state,
+            block_webrtc=block_webrtc,
+            allow_webgl=allow_webgl,
+            solve_cloudflare=solve_cloudflare,
+            additional_args=additional_args,
+            hide_canvas=hide_canvas,
+        )
+        return StorageStateResultModel(
+            page_url=result.page_url,
+            final_url=result.final_url,
+            strategy=result.strategy,
+            cookies=result.cookies,
+            local_storage=result.local_storage,
+            session_storage=result.session_storage,
+            origins=[StorageOriginEntryModel(**origin.to_dict()) for origin in result.origins],
+        )
+
+    @staticmethod
+    async def discover_endpoints(
+        page_url: str,
+        actions: Optional[List[Dict[str, Any]]] = None,
+        strategy: str = "fetch",
+        headless: bool = True,
+        google_search: bool = True,
+        real_chrome: bool = False,
+        wait: int | float = 0,
+        proxy: Optional[str | Dict[str, str]] = None,
+        timezone_id: str | None = None,
+        locale: str | None = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        useragent: Optional[str] = None,
+        cdp_url: Optional[str] = None,
+        timeout: int | float = 30000,
+        disable_resources: bool = False,
+        wait_selector: Optional[str] = None,
+        cookies: Sequence[SetCookieParam] | None = None,
+        network_idle: bool = True,
+        wait_selector_state: SelectorWaitStates = "attached",
+        block_webrtc: bool = False,
+        allow_webgl: bool = True,
+        solve_cloudflare: bool = False,
+        additional_args: Optional[Dict] = None,
+        hide_canvas: bool = False,
+        max_entries: int = 100,
+        max_body_chars: int = 4000,
+        url_contains: Optional[str] = None,
+    ) -> EndpointDiscoveryResultModel:
+        """Discover likely API, GraphQL, and WebSocket endpoints from browser-side traffic.
+
+        :param page_url: The initial page URL.
+        :param actions: Optional browser actions to execute before summarizing observed endpoints.
+        :param strategy: Browser-backed strategy to use. Options are:
+            - fetch
+            - stealthy_fetch
+        :param max_entries: Maximum number of observed requests to inspect.
+        :param max_body_chars: Maximum request body length retained for GraphQL inspection.
+        :param url_contains: Optional substring filter applied to observed request URLs.
+        """
+        result: SharedEndpointDiscoveryResult = await discover_endpoints_operation(
+            page_url=page_url,
+            actions=actions,
+            strategy=strategy,
+            headless=headless,
+            google_search=google_search,
+            real_chrome=real_chrome,
+            wait=wait,
+            proxy=proxy,
+            timezone_id=timezone_id,
+            locale=locale,
+            extra_headers=extra_headers,
+            useragent=useragent,
+            cdp_url=cdp_url,
+            timeout=timeout,
+            disable_resources=disable_resources,
+            wait_selector=wait_selector,
+            cookies=cookies,
+            network_idle=network_idle,
+            wait_selector_state=wait_selector_state,
+            block_webrtc=block_webrtc,
+            allow_webgl=allow_webgl,
+            solve_cloudflare=solve_cloudflare,
+            additional_args=additional_args,
+            hide_canvas=hide_canvas,
+            max_entries=max_entries,
+            max_body_chars=max_body_chars,
+            url_contains=url_contains,
+        )
+        return EndpointDiscoveryResultModel(
+            page_url=result.page_url,
+            final_url=result.final_url,
+            strategy=result.strategy,
+            count=result.count,
+            endpoints=[DiscoveredEndpointModel(**endpoint.to_dict()) for endpoint in result.endpoints],
+            graphql_operations=[GraphQLOperationModel(**operation.to_dict()) for operation in result.graphql_operations],
+            websocket_urls=result.websocket_urls,
         )
 
     def serve(self, http: bool, host: str, port: int):
@@ -849,5 +1325,41 @@ class ScraplingMCPServer:
             self.fetch_page_image,
             title="fetch_page_image",
             description=self.fetch_page_image.__doc__,
+        )
+        server.add_tool(
+            self.extract_app_state,
+            title="extract_app_state",
+            description=self.extract_app_state.__doc__,
+            structured_output=True,
+        )
+        server.add_tool(
+            self.observe_network,
+            title="observe_network",
+            description=self.observe_network.__doc__,
+            structured_output=True,
+        )
+        server.add_tool(
+            self.run_flow_and_extract,
+            title="run_flow_and_extract",
+            description=self.run_flow_and_extract.__doc__,
+            structured_output=True,
+        )
+        server.add_tool(
+            self.debug_page,
+            title="debug_page",
+            description=self.debug_page.__doc__,
+            structured_output=True,
+        )
+        server.add_tool(
+            self.export_storage_state,
+            title="export_storage_state",
+            description=self.export_storage_state.__doc__,
+            structured_output=True,
+        )
+        server.add_tool(
+            self.discover_endpoints,
+            title="discover_endpoints",
+            description=self.discover_endpoints.__doc__,
+            structured_output=True,
         )
         server.run(transport="stdio" if not http else "streamable-http")

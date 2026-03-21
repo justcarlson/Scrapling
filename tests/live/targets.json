@@ -1,0 +1,37 @@
+{
+  "books": {
+    "url": "https://books.toscrape.com/",
+    "known_text": "A Light in the Attic",
+    "expected_title": "All products | Books to Scrape - Sandbox"
+  },
+  "webscraper_ajax": {
+    "url": "https://webscraper.io/test-sites/e-commerce/ajax",
+    "expected_title": "Ajax | Web Scraper Test Sites"
+  },
+  "todomvc": {
+    "url": "https://demo.playwright.dev/todomvc/",
+    "expected_title": "React \u2022 TodoMVC"
+  },
+  "next_preview": {
+    "url": "https://next-preview.vercel.app/",
+    "expected_kind": "next_data",
+    "expected_key": "__NEXT_DATA__[0]"
+  },
+  "nuxt_new": {
+    "url": "https://nuxt.new/",
+    "expected_kind": "nuxt_data",
+    "expected_key_prefix": "__NUXT_DATA__"
+  },
+  "httpbin_cookies": {
+    "url": "https://httpbin.org/cookies/set?smoke=1",
+    "cookie_name": "smoke",
+    "cookie_value": "1"
+  },
+  "nopecha_cloudflare": {
+    "url": "https://nopecha.com/demo/cloudflare",
+    "expected_title_contains": "Just a moment"
+  },
+  "countries_graphql": {
+    "url": "https://countries.trevorblades.com/"
+  }
+}
