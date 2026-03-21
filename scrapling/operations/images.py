@@ -8,6 +8,12 @@ from scrapling.core._types import Optional, Literal
 
 FetchStrategy = Literal["get", "fetch", "stealthy_fetch"]
 
+BROWSER_PAGE_FETCH_TIMEOUT_MS = 45_000
+BROWSER_PAGE_FETCH_KWARGS = {
+    "disable_resources": True,
+    "timeout": BROWSER_PAGE_FETCH_TIMEOUT_MS,
+}
+
 
 @dataclass(slots=True)
 class ImageCandidate:
@@ -111,7 +117,17 @@ def _detect_image_mimetype(asset_url: str, response: ScraplingResponse) -> str:
     return guessed_type or "application/octet-stream"
 
 
-async def _fetch_with_strategy(url: str, strategy: FetchStrategy) -> ScraplingResponse:
+async def _fetch_page_with_strategy(url: str, strategy: FetchStrategy) -> ScraplingResponse:
+    if strategy == "get":
+        return Fetcher.get(url)
+    if strategy == "fetch":
+        return await DynamicFetcher.async_fetch(url, **BROWSER_PAGE_FETCH_KWARGS)
+    if strategy == "stealthy_fetch":
+        return await StealthyFetcher.async_fetch(url, **BROWSER_PAGE_FETCH_KWARGS)
+    raise ValueError("Unsupported strategy. Use one of: get, fetch, stealthy_fetch")
+
+
+async def _fetch_asset_with_strategy(url: str, strategy: FetchStrategy) -> ScraplingResponse:
     if strategy == "get":
         return Fetcher.get(url)
     if strategy == "fetch":
@@ -128,7 +144,7 @@ async def list_page_images(
     src_contains: Optional[str] = None,
     max_results: int = 20,
 ) -> ImageCandidatesResult:
-    page = await _fetch_with_strategy(page_url, strategy)
+    page = await _fetch_page_with_strategy(page_url, strategy)
     candidates = _extract_image_candidates(page, page_url, css_selector, src_contains, max_results)
     return ImageCandidatesResult(
         page_url=page_url,
@@ -164,7 +180,7 @@ async def fetch_page_image(
         )
 
     selected = candidates_result.images[image_index]
-    asset = await _fetch_with_strategy(selected.absolute_url, strategy)
+    asset = await _fetch_asset_with_strategy(selected.absolute_url, strategy)
     body = asset.body or b""
 
     if not isinstance(body, bytes):
