@@ -1,6 +1,8 @@
 from pathlib import Path
 from subprocess import check_output
 from sys import executable as python_executable
+from asyncio import run as asyncio_run
+from json import dumps as json_dumps
 
 from scrapling.core.utils import log
 from scrapling.engines.toolbelt.custom import Response
@@ -57,6 +59,22 @@ def __Request_and_Save(
     log.info(f"Content successfully saved to '{output_path}'")
 
 
+def __ResolveOutputPath(output_file: str) -> Path:
+    """Resolve output paths relative to the current working directory."""
+    output_path = Path(output_file)
+    if not output_path.is_absolute():
+        output_path = Path.cwd() / output_file
+    return output_path
+
+
+def __WriteBinaryFile(output_file: str, data: bytes) -> Path:
+    """Write raw bytes to disk and return the resolved output path."""
+    output_path = __ResolveOutputPath(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(data)
+    return output_path
+
+
 def __ParseExtractArguments(
     headers: List[str], cookies: str, params: str, json: Optional[str] = None
 ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Optional[Dict[str, str]]]:
@@ -100,6 +118,17 @@ def __BuildRequest(headers: List[str], cookies: str, params: str, json: Optional
         kwargs["impersonate"] = [browser.strip() for browser in kwargs["impersonate"].split(",")]
 
     return {**request_kwargs, **kwargs}
+
+
+def __ReadJSONInput(json_string: Optional[str], json_file: Optional[str]) -> Any:
+    """Read JSON from either a direct string or a file path."""
+    if json_string and json_file:
+        raise ValueError("Use either a JSON string or a JSON file, not both.")
+    if json_file:
+        return json_loads(Path(json_file).read_text(encoding="utf-8"))
+    if json_string:
+        return json_loads(json_string)
+    return None
 
 
 @command(help="Install all Scrapling's Fetchers dependencies")
@@ -191,6 +220,12 @@ def shell(code, level):
 )
 def extract():
     """Extract content from web pages and save to files"""
+    pass
+
+
+@group(name="inspect", help="Inspect fetched pages and assets with structured outputs and artifacts.")
+def inspect_group():
+    """Inspect pages and page-derived assets"""
     pass
 
 
@@ -814,6 +849,396 @@ def stealthy_fetch(
     __Request_and_Save(StealthyFetcher.fetch, url, output_file, css_selector, **kwargs)
 
 
+@inspect_group.command(name="list-page-images", help="List page image candidates as structured JSON.")
+@argument("page_url", required=True)
+@option(
+    "--strategy",
+    type=Choice(["get", "fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Fetching strategy to use.",
+)
+@option("--css-selector", default="img", show_default=True, help="CSS selector used to match image nodes.")
+@option("--src-contains", default=None, help="Filter candidates by partial match against the raw or absolute URL.")
+@option("--max-results", type=int, default=20, show_default=True, help="Maximum number of candidates to return.")
+def list_page_images(page_url, strategy, css_selector, src_contains, max_results):
+    """List page image candidates as structured JSON."""
+    from scrapling.operations.images import list_page_images as list_page_images_operation
+
+    result = asyncio_run(
+        list_page_images_operation(
+            page_url=page_url,
+            strategy=strategy,
+            css_selector=css_selector,
+            src_contains=src_contains,
+            max_results=max_results,
+        )
+    )
+    print(json_dumps(result.to_dict(), indent=2))
+
+
+@inspect_group.command(name="fetch-page-image", help="Fetch one page-matched image and save it to disk.")
+@argument("page_url", required=True)
+@argument("output_file", required=True)
+@option(
+    "--strategy",
+    type=Choice(["get", "fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Fetching strategy to use.",
+)
+@option("--css-selector", default="img", show_default=True, help="CSS selector used to match image nodes.")
+@option("--image-index", type=int, default=0, show_default=True, help="Zero-based candidate index to fetch.")
+@option("--src-contains", default=None, help="Filter candidates by partial match against the raw or absolute URL.")
+@option("--max-results", type=int, default=20, show_default=True, help="Maximum number of candidates to consider.")
+@option(
+    "--metadata-format",
+    type=Choice(["text", "json", "none"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="How to print metadata for the fetched image.",
+)
+def fetch_page_image(page_url, output_file, strategy, css_selector, image_index, src_contains, max_results, metadata_format):
+    """Fetch one page-matched image, save it to disk, and optionally print metadata."""
+    from scrapling.operations.images import fetch_page_image as fetch_page_image_operation
+
+    result = asyncio_run(
+        fetch_page_image_operation(
+            page_url=page_url,
+            strategy=strategy,
+            css_selector=css_selector,
+            image_index=image_index,
+            src_contains=src_contains,
+            max_results=max_results,
+        )
+    )
+    output_path = __WriteBinaryFile(output_file, result.data)
+    metadata = {**result.metadata_dict(), "output_file": str(output_path)}
+
+    if metadata_format == "json":
+        print(json_dumps(metadata, indent=2))
+    elif metadata_format == "text":
+        print(
+            "\n".join(
+                (
+                    f"Saved image {result.image_index} from {result.page_url}",
+                    f"Resolved URL: {result.image_url}",
+                    f"MIME type: {result.mime_type}",
+                    f"Size: {result.bytes_count} bytes",
+                    f"Output file: {output_path}",
+                )
+            )
+        )
+
+
+@inspect_group.command(name="extract-app-state", help="Extract common app-state payloads from a page.")
+@argument("page_url", required=True)
+@option(
+    "--strategy",
+    type=Choice(["get", "fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Fetching strategy to use.",
+)
+@option(
+    "--kind",
+    "kinds",
+    multiple=True,
+    type=Choice(["next_data", "nuxt_data", "json_ld", "application_json"], case_sensitive=False),
+    help="State kinds to extract. Repeat to narrow the output.",
+)
+@option(
+    "--format",
+    "output_format",
+    type=Choice(["json", "text", "markdown"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="How to print the extracted app state.",
+)
+def extract_app_state(page_url, strategy, kinds, output_format):
+    """Extract common app-state payloads and print them in the selected format."""
+    from scrapling.operations.app_state import extract_app_state as extract_app_state_operation
+
+    result = asyncio_run(
+        extract_app_state_operation(
+            page_url=page_url,
+            strategy=strategy,
+            kinds=list(kinds) if kinds else None,
+        )
+    )
+
+    if output_format == "json":
+        print(json_dumps(result.to_dict(), indent=2))
+    elif output_format == "markdown":
+        print(result.to_markdown())
+    else:
+        print(result.to_text())
+
+
+@inspect_group.command(name="observe-network", help="Observe browser-side network activity for a page.")
+@argument("page_url", required=True)
+@option(
+    "--strategy",
+    type=Choice(["fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Browser-backed strategy to use.",
+)
+@option(
+    "--format",
+    "output_format",
+    type=Choice(["json", "text", "markdown"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="How to print the observed network activity.",
+)
+@option("--include-headers/--no-include-headers", default=False, help="Include request and response headers.")
+@option("--include-bodies/--no-include-bodies", default=False, help="Include textual response previews when possible.")
+@option("--max-entries", type=int, default=100, show_default=True, help="Maximum number of requests to include.")
+@option("--max-body-chars", type=int, default=2000, show_default=True, help="Maximum response preview size.")
+@option("--url-contains", default=None, help="Optional substring filter for observed request URLs.")
+def observe_network(page_url, strategy, output_format, include_headers, include_bodies, max_entries, max_body_chars, url_contains):
+    """Observe browser-side network activity and print it in the selected format."""
+    from scrapling.operations.network import observe_network as observe_network_operation
+
+    result = asyncio_run(
+        observe_network_operation(
+            page_url=page_url,
+            strategy=strategy,
+            include_headers=include_headers,
+            include_bodies=include_bodies,
+            max_entries=max_entries,
+            max_body_chars=max_body_chars,
+            url_contains=url_contains,
+        )
+    )
+
+    if output_format == "json":
+        print(json_dumps(result.to_dict(), indent=2))
+    elif output_format == "markdown":
+        print(result.to_markdown())
+    else:
+        print(result.to_text())
+
+
+@inspect_group.command(name="run-flow-and-extract", help="Run a declarative browser flow and extract the final content.")
+@argument("page_url", required=True)
+@option(
+    "--actions-json",
+    default=None,
+    help="JSON array describing the browser actions to execute.",
+)
+@option(
+    "--actions-file",
+    default=None,
+    help="Path to a JSON file describing the browser actions to execute.",
+)
+@option(
+    "--strategy",
+    type=Choice(["fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Browser-backed strategy to use.",
+)
+@option(
+    "--extraction-type",
+    type=Choice(["markdown", "html", "text"], case_sensitive=False),
+    default="markdown",
+    show_default=True,
+    help="Final extraction type.",
+)
+@option("--css-selector", default=None, help="Optional CSS selector for the final extraction.")
+@option("--observe-network/--no-observe-network", default=False, help="Capture request/response activity during the flow.")
+@option("--include-headers/--no-include-headers", default=False, help="Include request and response headers when observing network activity.")
+@option("--include-bodies/--no-include-bodies", default=False, help="Include textual response previews when observing network activity.")
+@option("--max-entries", type=int, default=100, show_default=True, help="Maximum number of observed requests to include.")
+@option("--max-body-chars", type=int, default=2000, show_default=True, help="Maximum response preview size when observing network activity.")
+@option("--url-contains", default=None, help="Optional substring filter for observed request URLs.")
+@option(
+    "--format",
+    "output_format",
+    type=Choice(["json", "text", "markdown"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="How to print the flow result.",
+)
+def run_flow_and_extract(
+    page_url,
+    actions_json,
+    actions_file,
+    strategy,
+    extraction_type,
+    css_selector,
+    observe_network,
+    include_headers,
+    include_bodies,
+    max_entries,
+    max_body_chars,
+    url_contains,
+    output_format,
+):
+    """Run a declarative browser flow and print the extracted final content."""
+    from scrapling.operations.browser_flow import run_flow_and_extract as run_flow_and_extract_operation
+
+    actions = __ReadJSONInput(actions_json, actions_file) or []
+    if not isinstance(actions, list):
+        raise ValueError("Actions must be a JSON array.")
+
+    result = asyncio_run(
+        run_flow_and_extract_operation(
+            page_url=page_url,
+            actions=actions,
+            strategy=strategy,
+            extraction_type=extraction_type,
+            css_selector=css_selector,
+            observe_network=observe_network,
+            include_headers=include_headers,
+            include_bodies=include_bodies,
+            max_entries=max_entries,
+            max_body_chars=max_body_chars,
+            url_contains=url_contains,
+        )
+    )
+
+    if output_format == "json":
+        print(json_dumps(result.to_dict(), indent=2))
+    elif output_format == "markdown":
+        print(result.to_markdown())
+    else:
+        print(result.to_text())
+
+
+@inspect_group.command(name="debug-page", help="Load a page in the browser and return a compact diagnostic summary.")
+@argument("page_url", required=True)
+@option(
+    "--strategy",
+    type=Choice(["fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Browser-backed strategy to use.",
+)
+@option("--max-entries", type=int, default=100, show_default=True, help="Maximum number of observed requests to track.")
+@option(
+    "--format",
+    "output_format",
+    type=Choice(["json", "text", "markdown"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="How to print the page diagnostics.",
+)
+def debug_page(page_url, strategy, max_entries, output_format):
+    """Load a page in the browser and print a diagnostic summary."""
+    from scrapling.operations.debug import debug_page as debug_page_operation
+
+    result = asyncio_run(
+        debug_page_operation(
+            page_url=page_url,
+            strategy=strategy,
+            max_entries=max_entries,
+        )
+    )
+
+    if output_format == "json":
+        print(json_dumps(result.to_dict(), indent=2))
+    elif output_format == "markdown":
+        print(result.to_markdown())
+    else:
+        print(result.to_text())
+
+
+@inspect_group.command(name="export-storage-state", help="Load a page in the browser and print cookies plus web-storage state.")
+@argument("page_url", required=True)
+@option(
+    "--strategy",
+    type=Choice(["fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Browser-backed strategy to use.",
+)
+@option(
+    "--format",
+    "output_format",
+    type=Choice(["json", "text", "markdown"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="How to print the storage snapshot.",
+)
+def export_storage_state(page_url, strategy, output_format):
+    """Load a page in the browser and print cookies plus web-storage state."""
+    from scrapling.operations.storage_state import export_storage_state as export_storage_state_operation
+
+    result = asyncio_run(
+        export_storage_state_operation(
+            page_url=page_url,
+            strategy=strategy,
+        )
+    )
+
+    if output_format == "json":
+        print(json_dumps(result.to_dict(), indent=2))
+    elif output_format == "markdown":
+        print(result.to_markdown())
+    else:
+        print(result.to_text())
+
+
+@inspect_group.command(name="discover-endpoints", help="Discover likely API, GraphQL, and WebSocket endpoints from browser traffic.")
+@argument("page_url", required=True)
+@option(
+    "--actions-json",
+    default=None,
+    help="Optional JSON array describing browser actions to execute before summarizing endpoints.",
+)
+@option(
+    "--actions-file",
+    default=None,
+    help="Optional path to a JSON file describing browser actions to execute before summarizing endpoints.",
+)
+@option(
+    "--strategy",
+    type=Choice(["fetch", "stealthy_fetch"], case_sensitive=False),
+    default="fetch",
+    show_default=True,
+    help="Browser-backed strategy to use.",
+)
+@option("--max-entries", type=int, default=100, show_default=True, help="Maximum number of observed requests to inspect.")
+@option("--max-body-chars", type=int, default=4000, show_default=True, help="Maximum request body size retained for discovery.")
+@option("--url-contains", default=None, help="Optional substring filter for observed request URLs.")
+@option(
+    "--format",
+    "output_format",
+    type=Choice(["json", "text", "markdown"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="How to print the discovered endpoints.",
+)
+def discover_endpoints(page_url, actions_json, actions_file, strategy, max_entries, max_body_chars, url_contains, output_format):
+    """Discover likely API, GraphQL, and WebSocket endpoints from browser traffic."""
+    from scrapling.operations.discover_endpoints import discover_endpoints as discover_endpoints_operation
+
+    actions = __ReadJSONInput(actions_json, actions_file)
+    if actions is not None and not isinstance(actions, list):
+        raise ValueError("Actions must be a JSON array.")
+
+    result = asyncio_run(
+        discover_endpoints_operation(
+            page_url=page_url,
+            actions=actions,
+            strategy=strategy,
+            max_entries=max_entries,
+            max_body_chars=max_body_chars,
+            url_contains=url_contains,
+        )
+    )
+
+    if output_format == "json":
+        print(json_dumps(result.to_dict(), indent=2))
+    elif output_format == "markdown":
+        print(result.to_markdown())
+    else:
+        print(result.to_text())
+
+
 @group()
 def main():
     pass
@@ -823,4 +1248,9 @@ def main():
 main.add_command(install)
 main.add_command(shell)
 main.add_command(extract)
+main.add_command(inspect_group)
 main.add_command(mcp)
+
+
+if __name__ == "__main__":
+    main()
