@@ -164,6 +164,23 @@ Hence, the default value for the host the server is listening to is '0.0.0.0' an
 scrapling mcp --http --host '127.0.0.1' --port 8000
 ```
 
+## Smoke Testing
+
+The repository includes a matching MCP smoke harness that exercises the real server surface against public live targets from `tests/live/targets.json`.
+
+```bash
+# Full stdio smoke suite
+.venv/bin/python scripts/mcp_smoke.py --transport stdio
+
+# Minimal HTTP transport check
+.venv/bin/python scripts/mcp_smoke.py --transport http --tests list_tools get
+
+# Run only the app-state targets
+.venv/bin/python scripts/mcp_smoke.py --transport stdio --tests list_tools extract_app_state_next extract_app_state_nuxt
+```
+
+This harness validates the parity tools end to end instead of calling the operations directly.
+
 ## Examples
 
 Now we will show you some examples of prompts we used while testing the MCP server, but you are probably more creative than we are and better at prompt engineering than we are :)

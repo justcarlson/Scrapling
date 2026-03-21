@@ -410,6 +410,34 @@ scrapling extract get 'https://example.com' content.md
 scrapling extract get 'https://example.com' content.txt --css-selector '#fromSkipToProducts' --impersonate 'chrome'  # All elements matching the CSS selector '#fromSkipToProducts'
 scrapling extract fetch 'https://example.com' content.md --css-selector '#fromSkipToProducts' --no-headless
 scrapling extract stealthy-fetch 'https://nopecha.com/demo/cloudflare' captchas.html --css-selector '#padded_content a' --solve-cloudflare
+
+# Inspect server-side derived data with CLI parity to the MCP tools
+scrapling inspect list-page-images 'https://example.com/article'
+scrapling inspect fetch-page-image 'https://example.com/article' image.png --metadata-format json
+scrapling inspect extract-app-state 'https://example.com/article' --format markdown
+scrapling inspect observe-network 'https://example.com/app' --format json --include-bodies
+scrapling inspect run-flow-and-extract 'https://example.com/app' --actions-file actions.json --format json
+scrapling inspect run-flow-and-extract 'https://example.com/app' --actions-file actions.json --observe-network --include-bodies --format json
+scrapling inspect debug-page 'https://example.com/app' --format markdown
+scrapling inspect export-storage-state 'https://example.com/app' --format json
+scrapling inspect discover-endpoints 'https://example.com/app' --actions-file actions.json --format markdown
+```
+
+The CLI and MCP surfaces are kept in parity through the shared operations layer. For live end-to-end verification against public targets, use the bundled smoke runners and target registry:
+
+```bash
+# Full CLI live smoke suite
+.venv/bin/python scripts/live_smoke.py --timeout 300
+
+# Full MCP live smoke suite over stdio
+.venv/bin/python scripts/mcp_smoke.py --transport stdio
+
+# Minimal MCP HTTP transport check
+.venv/bin/python scripts/mcp_smoke.py --transport http --tests list_tools get
+
+# Shared live targets and flow fixtures
+cat tests/live/targets.json
+cat tests/live/actions/todomvc-add.json
 ```
 
 > [!NOTE]
