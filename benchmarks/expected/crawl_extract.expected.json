@@ -1,0 +1,12 @@
+{
+  "items": [
+    {"price": "$11.00", "title": "Page 1 Item 1", "url": "/catalog/page-1/item-1"},
+    {"price": "$12.00", "title": "Page 1 Item 2", "url": "/catalog/page-1/item-2"},
+    {"price": "$13.00", "title": "Page 1 Item 3", "url": "/catalog/page-1/item-3"},
+    {"price": "$14.00", "title": "Page 1 Item 4", "url": "/catalog/page-1/item-4"},
+    {"price": "$21.00", "title": "Page 2 Item 1", "url": "/catalog/page-2/item-1"},
+    {"price": "$22.00", "title": "Page 2 Item 2", "url": "/catalog/page-2/item-2"},
+    {"price": "$23.00", "title": "Page 2 Item 3", "url": "/catalog/page-2/item-3"},
+    {"price": "$24.00", "title": "Page 2 Item 4", "url": "/catalog/page-2/item-4"}
+  ]
+}

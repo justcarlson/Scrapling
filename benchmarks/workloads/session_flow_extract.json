@@ -1,0 +1,46 @@
+{
+  "id": "session_flow_extract",
+  "version": 1,
+  "kind": "static",
+  "fixture": "benchmarks/fixtures/static/session_step_1.html",
+  "fixtures": [
+    "benchmarks/fixtures/static/session_step_1.html",
+    "benchmarks/fixtures/static/session_step_2.html"
+  ],
+  "expected": "benchmarks/expected/session_flow_extract.expected.json",
+  "ready_condition": {
+    "type": "immediate"
+  },
+  "extract_spec": {
+    "strategy": "session_values",
+    "steps": [
+      {
+        "fixture_index": 0,
+        "fields": {
+          "csrf": "input[name='csrf']::attr(value)",
+          "login_user": "#login-user::text"
+        }
+      },
+      {
+        "fixture_index": 1,
+        "fields": {
+          "login_user": "#welcome strong::text",
+          "session_status": "#session-status::text",
+          "cart_count": "#cart-count::text"
+        }
+      }
+    ]
+  },
+  "correctness": {
+    "comparison": "exact",
+    "required_fields": ["csrf", "login_user", "session_status", "cart_count"],
+    "semantic_match_threshold": 1.0
+  },
+  "cost_weights": {
+    "wall_ms": 0.35,
+    "cpu_ms": 0.25,
+    "peak_rss_mb": 0.15,
+    "load_ms": 0.1,
+    "extract_ms": 0.15
+  }
+}

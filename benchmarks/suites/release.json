@@ -1,0 +1,51 @@
+{
+  "name": "release",
+  "version": 1,
+  "workloads": [
+    {
+      "id": "static_extract",
+      "weight": 0.15,
+      "required": true
+    },
+    {
+      "id": "large_dom_extract",
+      "weight": 0.15,
+      "required": true
+    },
+    {
+      "id": "text_similarity",
+      "weight": 0.1,
+      "required": true
+    },
+    {
+      "id": "crawl_extract",
+      "weight": 0.15,
+      "required": true
+    },
+    {
+      "id": "session_flow_extract",
+      "weight": 0.1,
+      "required": true
+    },
+    {
+      "id": "protected_replay_extract",
+      "weight": 0.05,
+      "required": true
+    },
+    {
+      "id": "browser_dynamic_extract",
+      "weight": 0.15,
+      "required": true
+    },
+    {
+      "id": "browser_session_extract",
+      "weight": 0.15,
+      "required": true
+    }
+  ],
+  "defaults": {
+    "repetitions": 5,
+    "warmups": 1,
+    "timeout_ms": 30000
+  }
+}

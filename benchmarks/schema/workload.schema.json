@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scrapling Benchmark Workload",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "kind",
+    "fixture",
+    "expected",
+    "extract_spec",
+    "correctness",
+    "cost_weights"
+  ],
+  "properties": {
+    "id": {"type": "string"},
+    "version": {"type": "integer"},
+    "kind": {"type": "string"},
+    "fixture": {"type": "string"},
+    "expected": {"type": "string"},
+    "ready_condition": {"type": "object"},
+    "extract_spec": {"type": "object"},
+    "correctness": {"type": "object"},
+    "cost_weights": {"type": "object"}
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "dev",
+  "version": 1,
+  "workloads": [
+    {
+      "id": "static_extract",
+      "weight": 0.4,
+      "required": true
+    },
+    {
+      "id": "large_dom_extract",
+      "weight": 0.35,
+      "required": true
+    },
+    {
+      "id": "text_similarity",
+      "weight": 0.25,
+      "required": true
+    }
+  ],
+  "defaults": {
+    "repetitions": 3,
+    "warmups": 1,
+    "timeout_ms": 30000
+  }
+}

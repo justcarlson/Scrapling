@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scrapling Benchmark Suite",
+  "type": "object",
+  "required": ["name", "version", "workloads"],
+  "properties": {
+    "name": {"type": "string"},
+    "version": {"type": "integer"},
+    "workloads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "weight"],
+        "properties": {
+          "id": {"type": "string"},
+          "weight": {"type": "number"},
+          "required": {"type": "boolean"}
+        }
+      }
+    },
+    "defaults": {"type": "object"}
+  }
+}

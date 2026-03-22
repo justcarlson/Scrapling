@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <body>
+    <main id="dynamic-root">
+      <div id="status">Loading dynamic catalog</div>
+    </main>
+    <script>
+      setTimeout(() => {
+        document.getElementById('status').textContent = 'Dynamic catalog ready';
+        const root = document.getElementById('dynamic-root');
+        const items = [
+          ['Dynamic Widget 1', '$81.00', '/dynamic/item-1'],
+          ['Dynamic Widget 2', '$82.00', '/dynamic/item-2'],
+          ['Dynamic Widget 3', '$83.00', '/dynamic/item-3']
+        ];
+        for (const [title, price, url] of items) {
+          const article = document.createElement('article');
+          article.className = 'product-card';
+          article.innerHTML = `<a href="${url}"><h3 class="title">${title}</h3><span class="price">${price}</span></a>`;
+          root.appendChild(article);
+        }
+      }, 50);
+    </script>
+  </body>
+</html>
