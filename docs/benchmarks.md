@@ -109,13 +109,15 @@ python scripts/perf_benchmark.py \
   --artifacts-dir .benchmarks/artifacts
 ```
 
-Fail the command if required correctness checks fail:
+Fail the command if required correctness checks fail or the run is not baseline-comparable:
 
 ```bash
 python scripts/perf_benchmark.py --suite dev --strict
 ```
 
 Workload crashes and timeouts are reported as failed workloads in the JSON report. They do not abort the evaluator unless the evaluator itself is misconfigured.
+
+`--strict` is acceptance-oriented. It exits non-zero when required correctness fails, when `srps` cannot be computed, or when any scored workload is missing a comparable baseline entry.
 
 ## Files
 

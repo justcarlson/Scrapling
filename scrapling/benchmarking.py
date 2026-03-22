@@ -262,6 +262,8 @@ def _validate_schema_fallback(
                 label=label,
                 path=f"{path}.{key}",
             )
+        elif additional_properties is False:
+            raise ValueError(f"Invalid {label}: unexpected property '{key}' at {path}")
         elif isinstance(additional_properties, Mapping):
             _validate_schema_fallback(
                 value,
@@ -1205,8 +1207,16 @@ def _warmup_worker(
         for _ in range(warmups):
             _run_extraction(workload, fixture_texts, fixture_paths)
         queue.put({"ok": True})
+    except _EnvironmentUnavailableError as exc:  # pragma: no cover - exercised through parent path
+        queue.put(
+            {
+                "ok": False,
+                "error": str(exc),
+                "failure_kind": "environment_unavailable",
+            }
+        )
     except Exception as exc:  # pragma: no cover - exercised through parent path
-        queue.put({"ok": False, "error": repr(exc)})
+        queue.put({"ok": False, "error": repr(exc), "failure_kind": "worker_error"})
 
 
 def _run_process_job(
@@ -1260,6 +1270,8 @@ def _run_warmups_out_of_process(
         timeout_message=f"warmup timed out after {timeout_ms} ms",
     )
     if not payload["ok"]:
+        if payload.get("failure_kind") == "environment_unavailable":
+            raise _EnvironmentUnavailableError(payload["error"])
         raise RuntimeError(payload["error"])
 
 

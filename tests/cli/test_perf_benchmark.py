@@ -137,6 +137,12 @@ def test_main_strict_mode_fails_when_report_is_not_comparable(monkeypatch):
     assert exit_code == 1
 
 
+def test_strict_help_text_mentions_comparability():
+    help_text = perf_benchmark.build_parser().format_help()
+
+    assert "not baseline-comparable" in help_text
+
+
 def test_main_passes_workload_filter(monkeypatch):
     captured = {}
 

@@ -90,7 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Return a non-zero exit code when required correctness gates fail.",
+        help=(
+            "Return a non-zero exit code when required correctness gates fail "
+            "or the run is not baseline-comparable."
+        ),
     )
     parser.add_argument(
         "--list-suites",

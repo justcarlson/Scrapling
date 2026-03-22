@@ -821,6 +821,40 @@ def test_report_schema_rejects_invalid_nested_shapes():
         )
 
 
+def test_fallback_schema_validator_rejects_unknown_keys_when_additional_properties_false(
+    monkeypatch,
+):
+    monkeypatch.setattr(benchmarking, "Draft202012Validator", None)
+    monkeypatch.setattr(
+        benchmarking,
+        "_schema_payload",
+        lambda _: {
+            "type": "object",
+            "properties": {
+                "child": {
+                    "type": "object",
+                    "properties": {
+                        "known": {"type": "string"},
+                    },
+                    "required": ["known"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["child"],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ValueError, match="unexpected property 'extra'"):
+        benchmarking._validate_schema(
+            {
+                "child": {"known": "value", "extra": "nope"},
+            },
+            "irrelevant.schema.json",
+            label="benchmark schema payload",
+        )
+
+
 def test_evaluate_suite_rejects_mismatched_baseline_suite(tmp_path):
     baseline_path = tmp_path / "holdout-baseline.json"
     save_baseline(baseline_path, evaluate_suite("holdout", repetitions=1, warmups=0))
@@ -959,6 +993,32 @@ def test_evaluate_workload_reports_environment_unavailable(monkeypatch):
         required=False,
         repetitions=1,
         warmups=0,
+        timeout_ms=None,
+        isolate_process=False,
+    )
+
+    assert report.passed is False
+    assert report.failure_kind == "environment_unavailable"
+    assert "missing browser extras" in " ".join(report.correctness.messages)
+
+
+def test_evaluate_workload_preserves_environment_unavailable_from_warmup(monkeypatch):
+    monkeypatch.setattr(
+        benchmarking,
+        "_run_process_job",
+        lambda **kwargs: {
+            "ok": False,
+            "error": "missing browser extras",
+            "failure_kind": "environment_unavailable",
+        },
+    )
+
+    report = evaluate_workload(
+        load_workload_spec("browser_dynamic_extract"),
+        weight=1.0,
+        required=False,
+        repetitions=1,
+        warmups=1,
         timeout_ms=None,
         isolate_process=False,
     )
