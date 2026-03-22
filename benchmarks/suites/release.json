@@ -35,12 +35,12 @@
     {
       "id": "browser_dynamic_extract",
       "weight": 0.15,
-      "required": true
+      "required": false
     },
     {
       "id": "browser_session_extract",
       "weight": 0.15,
-      "required": true
+      "required": false
     }
   ],
   "defaults": {

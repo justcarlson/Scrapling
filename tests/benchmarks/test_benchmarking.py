@@ -166,6 +166,44 @@ def test_release_suite_runs_new_workload_kinds():
     assert "browser_session_extract" in workload_ids
 
 
+def test_release_suite_treats_browser_workloads_as_optional(monkeypatch):
+    release_suite = load_suite_spec("release")
+    real_evaluate_workload = benchmarking.evaluate_workload
+
+    def fake_evaluate_workload(workload, **kwargs):
+        if workload.id.startswith("browser_"):
+            return benchmarking._failed_workload_report(
+                workload.id,
+                weight=kwargs["weight"],
+                required=kwargs["required"],
+                failure_kind="worker_error",
+                messages=("missing browser extras",),
+                baseline_entry=kwargs.get("baseline_entry"),
+                artifacts_dir=kwargs.get("artifacts_dir"),
+            )
+        return real_evaluate_workload(
+            workload,
+            **kwargs,
+        )
+
+    browser_entries = {
+        entry.id: entry.required for entry in release_suite.workloads if entry.id.startswith("browser_")
+    }
+    monkeypatch.setattr(benchmarking, "evaluate_workload", fake_evaluate_workload)
+
+    report = evaluate_suite("release", repetitions=1, warmups=0)
+
+    assert browser_entries == {
+        "browser_dynamic_extract": False,
+        "browser_session_extract": False,
+    }
+    assert report["passed"] is True
+    failed_browser_reports = [
+        workload for workload in report["workloads"] if workload["id"].startswith("browser_")
+    ]
+    assert all(workload["passed"] is False for workload in failed_browser_reports)
+
+
 def test_browser_suite_runs_browser_workloads():
     report = evaluate_suite("browser", repetitions=1, warmups=0)
 
@@ -699,6 +737,33 @@ def test_benchmarking_import_survives_missing_resource_module(tmp_path):
     stdout_lines = result.stdout.strip().splitlines()
     assert stdout_lines[0] == "True"
     assert float(stdout_lines[1]) == 0.0
+
+
+def test_evaluate_suite_api_works_from_plain_top_level_script(tmp_path):
+    script_path = tmp_path / "plain_benchmark_script.py"
+    script_path.write_text(
+        "from scrapling.benchmarking import evaluate_suite\n"
+        "print(evaluate_suite('dev', repetitions=1, warmups=0)['passed'])\n",
+        encoding="utf-8",
+    )
+    repo_root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ)
+    pythonpath = [str(repo_root)]
+    if env.get("PYTHONPATH"):
+        pythonpath.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
 
 
 def test_in_process_mode_converts_exceptions_to_failed_report(tmp_path):

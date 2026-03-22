@@ -468,9 +468,9 @@ def _fixture_server_root(fixture_paths: Sequence[str]) -> Path:
 
 
 def _benchmark_context(*, prefer_fork: bool = False):
-    if prefer_fork and "fork" in multiprocessing.get_all_start_methods():
+    if "fork" in multiprocessing.get_all_start_methods() and (prefer_fork or os.name != "nt"):
         return multiprocessing.get_context("fork")
-    return multiprocessing.get_context("spawn")
+    return multiprocessing.get_context(multiprocessing.get_start_method(allow_none=True))
 
 
 def _selector_get(node: Selector, selector: str) -> str | None:
