@@ -1,0 +1,19 @@
+{
+  "items": [
+    {"price": "$40.00", "title": "Delta 01", "url": "/products/delta-01"},
+    {"price": "$41.00", "title": "Delta 02", "url": "/products/delta-02"},
+    {"price": "$42.00", "title": "Delta 03", "url": "/products/delta-03"},
+    {"price": "$43.00", "title": "Delta 04", "url": "/products/delta-04"},
+    {"price": "$44.00", "title": "Delta 05", "url": "/products/delta-05"},
+    {"price": "$50.00", "title": "Epsilon 01", "url": "/products/epsilon-01"},
+    {"price": "$51.00", "title": "Epsilon 02", "url": "/products/epsilon-02"},
+    {"price": "$52.00", "title": "Epsilon 03", "url": "/products/epsilon-03"},
+    {"price": "$53.00", "title": "Epsilon 04", "url": "/products/epsilon-04"},
+    {"price": "$54.00", "title": "Epsilon 05", "url": "/products/epsilon-05"},
+    {"price": "$60.00", "title": "Zeta 01", "url": "/products/zeta-01"},
+    {"price": "$61.00", "title": "Zeta 02", "url": "/products/zeta-02"},
+    {"price": "$62.00", "title": "Zeta 03", "url": "/products/zeta-03"},
+    {"price": "$63.00", "title": "Zeta 04", "url": "/products/zeta-04"},
+    {"price": "$64.00", "title": "Zeta 05", "url": "/products/zeta-05"}
+  ]
+}

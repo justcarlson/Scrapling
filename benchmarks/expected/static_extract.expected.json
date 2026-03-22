@@ -1,0 +1,10 @@
+{
+  "items": [
+    {"price": "$19.99", "title": "Hammer Pro", "url": "/products/hammer-pro"},
+    {"price": "$24.50", "title": "Saw Lite", "url": "/products/saw-lite"},
+    {"price": "$14.25", "title": "Level Max", "url": "/products/level-max"},
+    {"price": "$29.00", "title": "Pruner Edge", "url": "/products/pruner-edge"},
+    {"price": "$17.75", "title": "Rake Compact", "url": "/products/rake-compact"},
+    {"price": "$33.10", "title": "Hose Flex", "url": "/products/hose-flex"}
+  ]
+}

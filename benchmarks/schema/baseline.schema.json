@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scrapling Benchmark Baseline",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "created_at",
+    "suite",
+    "suite_version",
+    "environment",
+    "workloads"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "created_at": {"type": "string"},
+    "suite": {"type": "string"},
+    "suite_version": {"type": "integer"},
+    "environment": {"type": "object"},
+    "workloads": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "effective_cost",
+          "weight",
+          "metrics",
+          "passed",
+          "workload_version",
+          "spec_fingerprint"
+        ],
+        "properties": {
+          "effective_cost": {"type": "number"},
+          "weight": {"type": "number"},
+          "metrics": {
+            "type": "object",
+            "required": ["wall_ms", "cpu_ms", "peak_rss_mb", "load_ms", "extract_ms", "work_units"],
+            "properties": {
+              "wall_ms": {"type": "number"},
+              "cpu_ms": {"type": "number"},
+              "peak_rss_mb": {"type": "number"},
+              "load_ms": {"type": "number"},
+              "extract_ms": {"type": "number"},
+              "work_units": {"type": "integer"}
+            }
+          },
+          "passed": {"type": "boolean"},
+          "workload_version": {"type": "integer"},
+          "spec_fingerprint": {"type": "string"}
+        }
+      }
+    }
+  }
+}

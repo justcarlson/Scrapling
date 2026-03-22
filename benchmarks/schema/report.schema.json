@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scrapling Benchmark Report",
+  "type": "object",
+  "required": [
+    "version",
+    "suite",
+    "suite_version",
+    "passed",
+    "srps",
+    "baseline",
+    "environment",
+    "summary",
+    "workloads"
+  ],
+  "properties": {
+    "version": {"type": "integer"},
+    "suite": {"type": "string"},
+    "suite_version": {"type": "integer"},
+    "passed": {"type": "boolean"},
+    "srps": {"type": ["number", "null"]},
+    "baseline": {
+      "type": "object",
+      "required": ["path", "version"],
+      "properties": {
+        "path": {"type": ["string", "null"]},
+        "version": {"type": ["integer", "null"]}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["scrapling_version", "python_version", "platform", "processor", "timestamp_utc"],
+      "properties": {
+        "scrapling_version": {"type": "string"},
+        "python_version": {"type": "string"},
+        "platform": {"type": "string"},
+        "processor": {"type": "string"},
+        "timestamp_utc": {"type": "string"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["correctness_passed", "generalization_penalty", "stability_penalty", "seed"],
+      "properties": {
+        "correctness_passed": {"type": "boolean"},
+        "generalization_penalty": {"type": "number"},
+        "stability_penalty": {"type": ["number", "null"]},
+        "seed": {"type": ["integer", "null"]},
+        "holdout": {
+          "type": ["object", "null"],
+          "required": ["suite", "passed", "srps"],
+          "properties": {
+            "suite": {"type": "string"},
+            "passed": {"type": "boolean"},
+            "srps": {"type": ["number", "null"]}
+          }
+        }
+      }
+    },
+    "workloads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "required",
+          "weight",
+          "passed",
+          "failure_kind",
+          "score",
+          "effective_cost",
+          "baseline_effective_cost",
+          "metrics",
+          "correctness",
+          "stability",
+          "artifacts",
+          "workload_version",
+          "spec_fingerprint"
+        ],
+        "properties": {
+          "id": {"type": "string"},
+          "required": {"type": "boolean"},
+          "weight": {"type": "number"},
+          "passed": {"type": "boolean"},
+          "failure_kind": {"type": ["string", "null"]},
+          "score": {"type": ["number", "null"]},
+          "effective_cost": {"type": "number"},
+          "baseline_effective_cost": {"type": ["number", "null"]},
+          "workload_version": {"type": "integer"},
+          "spec_fingerprint": {"type": "string"},
+          "metrics": {
+            "type": "object",
+            "required": ["wall_ms", "cpu_ms", "peak_rss_mb", "load_ms", "extract_ms", "work_units"],
+            "properties": {
+              "wall_ms": {"type": "number"},
+              "cpu_ms": {"type": "number"},
+              "peak_rss_mb": {"type": "number"},
+              "load_ms": {"type": "number"},
+              "extract_ms": {"type": "number"},
+              "work_units": {"type": "integer"}
+            }
+          },
+          "correctness": {
+            "type": "object",
+            "required": [
+              "passed",
+              "item_count",
+              "expected_item_count",
+              "required_fields_match",
+              "semantic_match",
+              "non_empty",
+              "messages"
+            ],
+            "properties": {
+              "passed": {"type": "boolean"},
+              "item_count": {"type": "integer"},
+              "expected_item_count": {"type": "integer"},
+              "required_fields_match": {"type": "boolean"},
+              "semantic_match": {"type": "number"},
+              "non_empty": {"type": "boolean"},
+              "messages": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            }
+          },
+          "stability": {
+            "type": "object",
+            "required": [
+              "mean_ms",
+              "median_ms",
+              "p95_ms",
+              "cv",
+              "success_rate",
+              "consistent_output",
+              "penalty"
+            ],
+            "properties": {
+              "mean_ms": {"type": "number"},
+              "median_ms": {"type": "number"},
+              "p95_ms": {"type": "number"},
+              "cv": {"type": "number"},
+              "success_rate": {"type": "number"},
+              "consistent_output": {"type": "boolean"},
+              "penalty": {"type": "number"}
+            }
+          },
+          "artifacts": {
+            "type": "object",
+            "properties": {
+              "raw_output": {"type": "string"},
+              "normalized_output": {"type": "string"},
+              "diff": {"type": "string"},
+              "metrics_trace": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  }
+}
