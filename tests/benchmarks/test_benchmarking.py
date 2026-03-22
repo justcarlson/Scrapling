@@ -93,6 +93,63 @@ def test_load_workload_spec_rejects_invalid_schema(tmp_path):
         load_workload_spec(workload_path)
 
 
+def test_evaluate_suite_resolves_workloads_relative_to_custom_suite_path(tmp_path):
+    workload_path = tmp_path / "relative_workload.json"
+    workload_path.write_text(
+        json.dumps(
+            {
+                "id": "relative_static",
+                "version": 1,
+                "kind": "static",
+                "fixture": "benchmarks/fixtures/static/catalog.html",
+                "expected": "benchmarks/expected/static_extract.expected.json",
+                "ready_condition": {"type": "immediate"},
+                "extract_spec": {
+                    "strategy": "record_css",
+                    "item_selector": ".product-card",
+                    "fields": {
+                        "title": ".title::text",
+                        "price": ".price::text",
+                        "url": "a::attr(href)",
+                    },
+                },
+                "correctness": {
+                    "comparison": "exact",
+                    "required_fields": ["title", "price", "url"],
+                    "semantic_match_threshold": 1.0,
+                },
+                "cost_weights": {
+                    "wall_ms": 0.35,
+                    "cpu_ms": 0.25,
+                    "peak_rss_mb": 0.15,
+                    "load_ms": 0.1,
+                    "extract_ms": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite_path = tmp_path / "custom_suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "name": "custom",
+                "version": 1,
+                "workloads": [{"id": "relative_workload.json", "weight": 1.0, "required": True}],
+                "defaults": {"repetitions": 1, "warmups": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    suite = load_suite_spec(suite_path)
+    report = evaluate_suite(suite_path, repetitions=1, warmups=0)
+
+    assert suite.workloads[0].id == "relative_static"
+    assert report["passed"] is True
+    assert report["workloads"][0]["id"] == "relative_static"
+
+
 def test_release_suite_runs_new_workload_kinds():
     report = evaluate_suite("release", repetitions=1, warmups=0)
 
@@ -479,6 +536,35 @@ def test_flaky_repetitions_fail_correctness(monkeypatch):
     assert report.passed is False
     assert report.failure_kind == "correctness"
     assert "repetitions" in " ".join(report.correctness.messages)
+
+
+def test_warmups_do_not_pollute_peak_rss_in_measured_repetitions(monkeypatch):
+    workload = load_workload_spec("static_extract")
+    expected_output = json.loads(Path(workload.expected).read_text(encoding="utf-8"))
+    state = {"calls": 0}
+
+    def fake_run_extraction(*args, **kwargs):
+        state["calls"] += 1
+        return expected_output, 1.0, 1.0, ("catalog page",)
+
+    def fake_peak_rss():
+        return 500.0 if state["calls"] > 1 else 50.0
+
+    monkeypatch.setattr(benchmarking, "_run_extraction", fake_run_extraction)
+    monkeypatch.setattr(benchmarking, "_current_peak_rss_mb", fake_peak_rss)
+
+    report = evaluate_workload(
+        workload,
+        weight=1.0,
+        required=True,
+        repetitions=1,
+        warmups=1,
+        timeout_ms=None,
+        isolate_process=False,
+    )
+
+    assert report.passed is True
+    assert report.metrics.peak_rss_mb == 50.0
 
 
 def test_in_process_mode_converts_exceptions_to_failed_report(tmp_path):

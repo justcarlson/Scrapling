@@ -56,6 +56,7 @@ class SuiteWorkload:
     id: str
     weight: float
     required: bool = True
+    spec_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -284,6 +285,22 @@ def _resolve_relative(path_value: str, base_path: Path) -> Path:
     return (base_path.parent / path).resolve()
 
 
+def _resolve_suite_workload_ref(path_value: str, suite_path: Path) -> str:
+    path = Path(path_value)
+    if path.is_absolute():
+        return str(path)
+    if path.exists():
+        return str(path.resolve())
+
+    repo_candidate = (REPO_ROOT / path).resolve()
+    if repo_candidate.exists():
+        return str(repo_candidate)
+
+    if path.suffix or len(path.parts) > 1:
+        return str((suite_path.parent / path).resolve())
+    return path_value
+
+
 def list_suite_names() -> list[str]:
     if not SUITES_ROOT.exists():
         return []
@@ -324,19 +341,23 @@ def load_suite_spec(
     suite_path = _resolve_json_path(suite_name_or_path, SUITES_ROOT)
     payload = _load_json(suite_path)
     _validate_schema(payload, "suite.schema.json", label="benchmark suite spec")
-    workloads = tuple(
-        SuiteWorkload(
-            id=entry["id"],
-            weight=float(entry["weight"]),
-            required=bool(entry.get("required", True)),
+    workloads: list[SuiteWorkload] = []
+    for entry in payload["workloads"]:
+        spec_ref = _resolve_suite_workload_ref(entry["id"], suite_path)
+        workload_spec = load_workload_spec(spec_ref)
+        workloads.append(
+            SuiteWorkload(
+                id=workload_spec.id,
+                weight=float(entry["weight"]),
+                required=bool(entry.get("required", True)),
+                spec_ref=spec_ref,
+            )
         )
-        for entry in payload["workloads"]
-    )
     defaults = payload.get("defaults", {})
     spec = SuiteSpec(
         name=payload["name"],
         version=int(payload["version"]),
-        workloads=workloads,
+        workloads=tuple(workloads),
         defaults=SuiteDefaults(
             repetitions=int(defaults.get("repetitions", DEFAULT_REPETITIONS)),
             warmups=int(defaults.get("warmups", DEFAULT_WARMUPS)),
@@ -428,6 +449,12 @@ def _percentile(values: list[float], percentile: float) -> float:
 def _current_peak_rss_mb() -> float:
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return round(rss / 1024, 4)
+
+
+def _benchmark_context(*, prefer_fork: bool = False):
+    if prefer_fork and "fork" in multiprocessing.get_all_start_methods():
+        return multiprocessing.get_context("fork")
+    return multiprocessing.get_context("spawn")
 
 
 def _selector_get(node: Selector, selector: str) -> str | None:
@@ -869,8 +896,7 @@ def _evaluate_workload_in_process(
     ]
     expected_output = _load_json(Path(workload.expected))
 
-    for _ in range(warmups):
-        _run_extraction(workload, fixture_texts, fixture_paths)
+    _run_warmups_out_of_process(workload, warmups=warmups)
 
     wall_samples: list[float] = []
     cpu_samples: list[float] = []
@@ -1046,6 +1072,49 @@ def _workload_worker(
         queue.put({"ok": False, "error": repr(exc)})
 
 
+def _warmup_worker(
+    queue: multiprocessing.queues.Queue,
+    workload_payload: dict[str, Any],
+    *,
+    warmups: int,
+) -> None:
+    try:
+        workload = WorkloadSpec(**workload_payload)
+        fixture_paths = workload.fixtures or (workload.fixture,)
+        fixture_texts = [
+            Path(path_value).read_text(encoding="utf-8")
+            for path_value in fixture_paths
+        ]
+        for _ in range(warmups):
+            _run_extraction(workload, fixture_texts, fixture_paths)
+        queue.put({"ok": True})
+    except Exception as exc:  # pragma: no cover - exercised through parent path
+        queue.put({"ok": False, "error": repr(exc)})
+
+
+def _run_warmups_out_of_process(workload: WorkloadSpec, *, warmups: int) -> None:
+    if warmups <= 0:
+        return
+
+    ctx = _benchmark_context(prefer_fork=True)
+    queue = ctx.Queue()
+    process = ctx.Process(
+        target=_warmup_worker,
+        args=(queue, asdict(workload)),
+        kwargs={"warmups": warmups},
+    )
+    process.start()
+    process.join()
+    if process.exitcode != 0:
+        raise RuntimeError(f"benchmark warmup worker failed with exit code {process.exitcode}")
+    try:
+        payload = queue.get(timeout=0.1)
+    except Empty as exc:
+        raise RuntimeError("benchmark warmup worker exited without producing a result") from exc
+    if not payload["ok"]:
+        raise RuntimeError(payload["error"])
+
+
 def _run_in_process_with_timeout(
     timeout_ms: int | None,
     func,
@@ -1135,7 +1204,7 @@ def evaluate_workload(
                 baseline_entry=baseline_entry,
             )
 
-    ctx = multiprocessing.get_context("spawn")
+    ctx = _benchmark_context()
     queue = ctx.Queue()
     process = ctx.Process(
         target=_workload_worker,
@@ -1325,14 +1394,14 @@ def _evaluate_suite_core(
     reports: list[WorkloadReport] = []
     workload_metadata: list[tuple[WorkloadReport, WorkloadSpec]] = []
     for entry in suite.workloads:
-        spec = load_workload_spec(entry.id)
+        spec = load_workload_spec(entry.spec_ref or entry.id)
         report = evaluate_workload(
             spec,
             weight=entry.weight,
             required=entry.required,
             repetitions=repetitions or suite.defaults.repetitions,
             warmups=warmups if warmups is not None else suite.defaults.warmups,
-            baseline_entry=baseline_workloads.get(entry.id),
+            baseline_entry=baseline_workloads.get(spec.id),
             artifacts_dir=artifacts_dir,
             timeout_ms=suite.defaults.timeout_ms,
         )
