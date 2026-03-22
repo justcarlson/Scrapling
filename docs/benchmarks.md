@@ -157,6 +157,8 @@ Use the workload breakdown to diagnose why the score changed:
 - `correctness`: output fidelity
 - `stability`: run-to-run timing and output consistency
 - `metrics_trace`: per-repetition timing, correctness, and normalized-output hashes for audit
-- `failure_kind`: `null`, `correctness`, `timeout`, `worker_error`, `worker_exit`, or `worker_protocol_error`
+- `failure_kind`: `null`, `correctness`, `timeout`, `worker_error`, `worker_exit`, `worker_protocol_error`, or `environment_unavailable`
 
 If `passed` is false, the score is intentionally zero. That is not a benchmark failure. It is the evaluator refusing to reward a functional regression.
+
+Optional workloads marked `environment_unavailable` are treated neutrally in suite scoring. Required workloads marked that way still fail the suite.
