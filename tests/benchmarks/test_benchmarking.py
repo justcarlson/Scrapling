@@ -1,6 +1,10 @@
 import json
+import os
+import subprocess
 from collections import deque
 from pathlib import Path
+import sys
+import textwrap
 
 import pytest
 
@@ -178,6 +182,91 @@ def test_browser_holdout_suite_runs_browser_workloads():
     assert report["passed"] is True
     assert "holdout_browser_dynamic_extract" in workload_ids
     assert "holdout_browser_session_extract" in workload_ids
+
+
+def test_custom_browser_suite_supports_fixtures_outside_repo_root(tmp_path):
+    fixture_path = tmp_path / "external_browser_fixture.html"
+    fixture_path.write_text(
+        """
+        <html>
+          <body>
+            <article class="product-card">
+              <h2 class="title">External Widget</h2>
+              <span class="price">$9.99</span>
+              <a href="/external-widget">View</a>
+            </article>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+    expected_path = tmp_path / "external_browser.expected.json"
+    expected_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "External Widget",
+                        "price": "$9.99",
+                        "url": "/external-widget",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    workload_path = tmp_path / "external_browser_workload.json"
+    workload_path.write_text(
+        json.dumps(
+            {
+                "id": "external_browser_extract",
+                "version": 1,
+                "kind": "browser",
+                "fixture": str(fixture_path),
+                "expected": str(expected_path),
+                "ready_condition": {"selector": ".product-card", "state": "attached", "timeout_ms": 5000},
+                "extract_spec": {
+                    "strategy": "record_css",
+                    "item_selector": ".product-card",
+                    "fields": {
+                        "title": ".title::text",
+                        "price": ".price::text",
+                        "url": "a::attr(href)",
+                    },
+                },
+                "correctness": {
+                    "comparison": "exact",
+                    "required_fields": ["title", "price", "url"],
+                    "semantic_match_threshold": 1.0,
+                },
+                "cost_weights": {
+                    "wall_ms": 0.35,
+                    "cpu_ms": 0.25,
+                    "peak_rss_mb": 0.15,
+                    "load_ms": 0.1,
+                    "extract_ms": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite_path = tmp_path / "external_browser_suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "name": "external_browser",
+                "version": 1,
+                "workloads": [{"id": "external_browser_workload.json", "weight": 1.0, "required": True}],
+                "defaults": {"repetitions": 1, "warmups": 0, "timeout_ms": 5000},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = evaluate_suite(suite_path, repetitions=1, warmups=0)
+
+    assert report["passed"] is True
+    assert report["workloads"][0]["id"] == "external_browser_extract"
 
 
 def test_evaluate_suite_produces_report_and_artifacts(tmp_path):
@@ -565,6 +654,51 @@ def test_warmups_do_not_pollute_peak_rss_in_measured_repetitions(monkeypatch):
 
     assert report.passed is True
     assert report.metrics.peak_rss_mb == 50.0
+
+
+def test_benchmarking_import_survives_missing_resource_module(tmp_path):
+    sitecustomize = tmp_path / "sitecustomize.py"
+    sitecustomize.write_text(
+        textwrap.dedent(
+            """
+            import builtins
+
+            _real_import = builtins.__import__
+
+            def _blocked_import(name, *args, **kwargs):
+                if name == "resource":
+                    raise ModuleNotFoundError("No module named 'resource'")
+                return _real_import(name, *args, **kwargs)
+
+            builtins.__import__ = _blocked_import
+            """
+        ),
+        encoding="utf-8",
+    )
+    repo_root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ)
+    pythonpath = [str(tmp_path), str(repo_root)]
+    if env.get("PYTHONPATH"):
+        pythonpath.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import scrapling.benchmarking as b; print('dev' in b.list_suite_names()); print(b._current_peak_rss_mb())",
+        ],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    stdout_lines = result.stdout.strip().splitlines()
+    assert stdout_lines[0] == "True"
+    assert float(stdout_lines[1]) == 0.0
 
 
 def test_in_process_mode_converts_exceptions_to_failed_report(tmp_path):

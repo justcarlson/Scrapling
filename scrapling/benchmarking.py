@@ -7,12 +7,12 @@ import json
 import logging
 import math
 import multiprocessing
+import os
 import platform
 import signal
 from difflib import SequenceMatcher
 from functools import lru_cache
 from queue import Empty
-import resource
 import statistics
 import threading
 from dataclasses import asdict, dataclass, field
@@ -36,6 +36,11 @@ BENCHMARKS_ROOT = REPO_ROOT / "benchmarks"
 SCHEMA_ROOT = BENCHMARKS_ROOT / "schema"
 SUITES_ROOT = BENCHMARKS_ROOT / "suites"
 WORKLOADS_ROOT = BENCHMARKS_ROOT / "workloads"
+
+try:
+    import resource
+except ModuleNotFoundError:  # pragma: no cover - exercised in subprocess test
+    resource = None
 
 try:  # pragma: no cover - exercised when installed
     from jsonschema import Draft202012Validator
@@ -447,8 +452,19 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _current_peak_rss_mb() -> float:
+    if resource is None:
+        return 0.0
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return round(rss / 1024, 4)
+
+
+def _fixture_server_root(fixture_paths: Sequence[str]) -> Path:
+    resolved = [Path(path).resolve() for path in fixture_paths]
+    if all(path.is_relative_to(REPO_ROOT) for path in resolved):
+        return REPO_ROOT
+    if len(resolved) == 1:
+        return resolved[0].parent
+    return Path(os.path.commonpath([str(path) for path in resolved]))
 
 
 def _benchmark_context(*, prefer_fork: bool = False):
@@ -474,7 +490,7 @@ class _SilentStaticHandler(http.server.SimpleHTTPRequestHandler):
 
 class LocalFixtureServer:
     def __init__(self, root: Path):
-        self.root = root
+        self.root = root.resolve()
         self._server: http.server.ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -504,7 +520,7 @@ class LocalFixtureServer:
         return f"http://{host}:{port}"
 
     def url_for(self, path: str | Path) -> str:
-        relative = Path(path).resolve().relative_to(REPO_ROOT)
+        relative = Path(path).resolve().relative_to(self.root)
         return f"{self.base_url}/{quote(relative.as_posix())}"
 
 
@@ -561,7 +577,7 @@ def _run_browser_extraction(
 ) -> tuple[dict[str, Any], float, float, Sequence[str]]:
     from scrapling import DynamicFetcher
 
-    with LocalFixtureServer(REPO_ROOT) as server:
+    with LocalFixtureServer(_fixture_server_root(fixture_paths)) as server:
         start_url = server.url_for(fixture_paths[0])
         load_start = perf_counter_ns()
         token = set_logger(_quiet_logger())
