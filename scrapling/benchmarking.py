@@ -30,6 +30,13 @@ BASELINE_SCHEMA_VERSION = 3
 DEFAULT_REPETITIONS = 5
 DEFAULT_WARMUPS = 1
 DEFAULT_TIMEOUT_MS = 30_000
+REQUIRED_COST_WEIGHT_KEYS = (
+    "wall_ms",
+    "cpu_ms",
+    "peak_rss_mb",
+    "load_ms",
+    "extract_ms",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS_ROOT = REPO_ROOT / "benchmarks"
@@ -132,6 +139,18 @@ class WorkloadReport:
     correctness: CorrectnessSummary
     stability: StabilitySummary
     artifacts: Mapping[str, str]
+
+
+class _WorkerExitError(RuntimeError):
+    pass
+
+
+class _WorkerProtocolError(RuntimeError):
+    pass
+
+
+class _EnvironmentUnavailableError(RuntimeError):
+    pass
 
 
 def _report_suite_score(report: Mapping[str, Any]) -> float | None:
@@ -264,6 +283,55 @@ def _validate_schema(payload: Mapping[str, Any], schema_name: str, *, label: str
     _validate_schema_fallback(payload, schema, label=label)
 
 
+def _validate_suite_invariants(payload: Mapping[str, Any]) -> None:
+    workloads = payload.get("workloads", [])
+    if not workloads:
+        raise ValueError("Invalid benchmark suite spec: workloads must not be empty")
+
+    total_weight = 0.0
+    for entry in workloads:
+        weight = entry["weight"]
+        if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+            raise ValueError("Invalid benchmark suite spec: workload weights must be numeric")
+        if weight < 0:
+            raise ValueError("Invalid benchmark suite spec: workload weights must be non-negative")
+        total_weight += float(weight)
+
+    if not math.isclose(total_weight, 1.0, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError("Invalid benchmark suite spec: workload weights must sum to 1.0")
+
+
+def _validate_cost_weights(cost_weights: Mapping[str, Any]) -> None:
+    missing = [key for key in REQUIRED_COST_WEIGHT_KEYS if key not in cost_weights]
+    if missing:
+        raise ValueError(
+            "Invalid benchmark workload spec: Missing required cost weight(s): "
+            + ", ".join(missing)
+        )
+
+    unknown = sorted(set(cost_weights) - set(REQUIRED_COST_WEIGHT_KEYS))
+    if unknown:
+        raise ValueError(
+            "Invalid benchmark workload spec: Unsupported cost weight(s): "
+            + ", ".join(unknown)
+        )
+
+    for key in REQUIRED_COST_WEIGHT_KEYS:
+        value = cost_weights[key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(
+                f"Invalid benchmark workload spec: Cost weight '{key}' must be numeric"
+            )
+        if value < 0:
+            raise ValueError(
+                f"Invalid benchmark workload spec: Cost weight '{key}' must be non-negative"
+            )
+
+
+def _validate_workload_invariants(payload: Mapping[str, Any]) -> None:
+    _validate_cost_weights(payload["cost_weights"])
+
+
 def _resolve_json_path(path_or_name: str | Path, default_root: Path) -> Path:
     candidate = Path(path_or_name)
     if candidate.is_absolute() and candidate.exists():
@@ -322,6 +390,7 @@ def load_workload_spec(path_or_name: str | Path) -> WorkloadSpec:
     spec_path = _resolve_json_path(path_or_name, WORKLOADS_ROOT)
     payload = _load_json(spec_path)
     _validate_schema(payload, "workload.schema.json", label="benchmark workload spec")
+    _validate_workload_invariants(payload)
     return WorkloadSpec(
         id=payload["id"],
         version=int(payload["version"]),
@@ -346,6 +415,7 @@ def load_suite_spec(
     suite_path = _resolve_json_path(suite_name_or_path, SUITES_ROOT)
     payload = _load_json(suite_path)
     _validate_schema(payload, "suite.schema.json", label="benchmark suite spec")
+    _validate_suite_invariants(payload)
     workloads: list[SuiteWorkload] = []
     for entry in payload["workloads"]:
         spec_ref = _resolve_suite_workload_ref(entry["id"], suite_path)
@@ -455,6 +525,8 @@ def _current_peak_rss_mb() -> float:
     if resource is None:
         return 0.0
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if platform.system() == "Darwin":
+        return round(rss / (1024 * 1024), 4)
     return round(rss / 1024, 4)
 
 
@@ -579,23 +651,29 @@ def _run_browser_extraction(
     workload: WorkloadSpec,
     fixture_paths: Sequence[str],
 ) -> tuple[dict[str, Any], float, float, Sequence[str]]:
-    from scrapling import DynamicFetcher
+    try:
+        from scrapling import DynamicFetcher
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise _EnvironmentUnavailableError("browser benchmark dependencies are unavailable") from exc
 
     with LocalFixtureServer(_fixture_server_root(fixture_paths)) as server:
         start_url = server.url_for(fixture_paths[0])
         load_start = perf_counter_ns()
         token = set_logger(_quiet_logger())
         try:
-            response = DynamicFetcher.fetch(
-                start_url,
-                headless=True,
-                google_search=False,
-                wait_selector=workload.ready_condition.get("selector"),
-                wait_selector_state=workload.ready_condition.get("state", "attached"),
-                timeout=int(workload.ready_condition.get("timeout_ms", DEFAULT_TIMEOUT_MS)),
-                network_idle=bool(workload.ready_condition.get("network_idle", False)),
-                wait=int(workload.ready_condition.get("wait_ms", 0)),
-            )
+            try:
+                response = DynamicFetcher.fetch(
+                    start_url,
+                    headless=True,
+                    google_search=False,
+                    wait_selector=workload.ready_condition.get("selector"),
+                    wait_selector_state=workload.ready_condition.get("state", "attached"),
+                    timeout=int(workload.ready_condition.get("timeout_ms", DEFAULT_TIMEOUT_MS)),
+                    network_idle=bool(workload.ready_condition.get("network_idle", False)),
+                    wait=int(workload.ready_condition.get("wait_ms", 0)),
+                )
+            except (ImportError, ModuleNotFoundError) as exc:
+                raise _EnvironmentUnavailableError("browser benchmark dependencies are unavailable") from exc
         finally:
             reset_logger(token)
         load_ms = (perf_counter_ns() - load_start) / 1_000_000
@@ -688,23 +766,34 @@ def _semantic_field_score(expected_value: Any, actual_value: Any) -> float:
     return 0.0
 
 
+def _semantic_item_score(expected_item: Mapping[str, Any], actual_item: Mapping[str, Any]) -> float:
+    fields = sorted(set(expected_item) | set(actual_item))
+    if not fields:
+        return 0.0
+    return statistics.mean(
+        _semantic_field_score(expected_item.get(field), actual_item.get(field))
+        for field in fields
+    )
+
+
 def _semantic_match_score(expected_items: Sequence[Mapping[str, Any]], actual_items: Sequence[Mapping[str, Any]]) -> float:
     if not expected_items and not actual_items:
         return 1.0
     if not expected_items or not actual_items:
         return 0.0
 
-    compared = 0
+    remaining_actuals = list(actual_items)
     total_score = 0.0
-    for expected_item, actual_item in zip(expected_items, actual_items, strict=False):
-        fields = sorted(set(expected_item) | set(actual_item))
-        if not fields:
-            continue
-        compared += 1
-        total_score += statistics.mean(
-            _semantic_field_score(expected_item.get(field), actual_item.get(field))
-            for field in fields
+    compared = 0
+    for expected_item in expected_items:
+        if not remaining_actuals:
+            break
+        best_index = max(
+            range(len(remaining_actuals)),
+            key=lambda index: _semantic_item_score(expected_item, remaining_actuals[index]),
         )
+        total_score += _semantic_item_score(expected_item, remaining_actuals.pop(best_index))
+        compared += 1
 
     if compared == 0:
         return 0.0
@@ -727,7 +816,8 @@ def _failed_workload_report(
     score = None
     if baseline_entry and float(baseline_entry.get("effective_cost", 0.0)) > 0:
         baseline_effective_cost = float(baseline_entry["effective_cost"])
-        score = 0.0
+        if failure_kind != "environment_unavailable":
+            score = 0.0
 
     artifact_targets = _artifact_paths(Path(artifacts_dir) if artifacts_dir else None, workload_id)
     if artifact_targets:
@@ -901,6 +991,7 @@ def _evaluate_workload_in_process(
     required: bool,
     repetitions: int = DEFAULT_REPETITIONS,
     warmups: int = DEFAULT_WARMUPS,
+    warmup_timeout_ms: int | None = None,
     baseline_entry: Mapping[str, Any] | None = None,
     artifacts_dir: str | Path | None = None,
 ) -> WorkloadReport:
@@ -916,7 +1007,7 @@ def _evaluate_workload_in_process(
     ]
     expected_output = _load_json(Path(workload.expected))
 
-    _run_warmups_out_of_process(workload, warmups=warmups)
+    _run_warmups_out_of_process(workload, warmups=warmups, timeout_ms=warmup_timeout_ms)
 
     wall_samples: list[float] = []
     cpu_samples: list[float] = []
@@ -1074,6 +1165,7 @@ def _workload_worker(
     required: bool,
     repetitions: int,
     warmups: int,
+    timeout_ms: int | None,
     baseline_entry: Mapping[str, Any] | None,
     artifacts_dir: str | Path | None,
 ) -> None:
@@ -1084,12 +1176,17 @@ def _workload_worker(
             required=required,
             repetitions=repetitions,
             warmups=warmups,
+            warmup_timeout_ms=timeout_ms,
             baseline_entry=baseline_entry,
             artifacts_dir=artifacts_dir,
         )
         queue.put({"ok": True, "report": asdict(report)})
+    except TimeoutError as exc:  # pragma: no cover - exercised through parent path
+        queue.put({"ok": False, "error": str(exc), "failure_kind": "timeout"})
+    except _EnvironmentUnavailableError as exc:  # pragma: no cover - exercised through parent path
+        queue.put({"ok": False, "error": str(exc), "failure_kind": "environment_unavailable"})
     except Exception as exc:  # pragma: no cover - exercised through parent path
-        queue.put({"ok": False, "error": repr(exc)})
+        queue.put({"ok": False, "error": repr(exc), "failure_kind": "worker_error"})
 
 
 def _warmup_worker(
@@ -1112,25 +1209,56 @@ def _warmup_worker(
         queue.put({"ok": False, "error": repr(exc)})
 
 
-def _run_warmups_out_of_process(workload: WorkloadSpec, *, warmups: int) -> None:
+def _run_process_job(
+    *,
+    ctx,
+    target,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+    timeout_ms: int | None,
+    timeout_message: str,
+) -> dict[str, Any]:
+    queue = ctx.Queue()
+    process = ctx.Process(
+        target=target,
+        args=(queue, *args),
+        kwargs=dict(kwargs),
+    )
+    process.start()
+    process.join(timeout=None if timeout_ms is None else timeout_ms / 1000)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=1)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=1)
+        raise TimeoutError(timeout_message)
+    if process.exitcode != 0:
+        raise _WorkerExitError(f"benchmark worker failed with exit code {process.exitcode}")
+    try:
+        return queue.get(timeout=0.1)
+    except Empty as exc:
+        raise _WorkerProtocolError("benchmark worker exited without producing a result") from exc
+
+
+def _run_warmups_out_of_process(
+    workload: WorkloadSpec,
+    *,
+    warmups: int,
+    timeout_ms: int | None = None,
+) -> None:
     if warmups <= 0:
         return
 
     ctx = _benchmark_context(prefer_fork=True)
-    queue = ctx.Queue()
-    process = ctx.Process(
+    payload = _run_process_job(
+        ctx=ctx,
         target=_warmup_worker,
-        args=(queue, asdict(workload)),
+        args=(asdict(workload),),
         kwargs={"warmups": warmups},
+        timeout_ms=timeout_ms,
+        timeout_message=f"warmup timed out after {timeout_ms} ms",
     )
-    process.start()
-    process.join()
-    if process.exitcode != 0:
-        raise RuntimeError(f"benchmark warmup worker failed with exit code {process.exitcode}")
-    try:
-        payload = queue.get(timeout=0.1)
-    except Empty as exc:
-        raise RuntimeError("benchmark warmup worker exited without producing a result") from exc
     if not payload["ok"]:
         raise RuntimeError(payload["error"])
 
@@ -1200,6 +1328,7 @@ def evaluate_workload(
                 required=required,
                 repetitions=repetitions,
                 warmups=warmups,
+                warmup_timeout_ms=timeout_ms,
                 baseline_entry=baseline_entry,
                 artifacts_dir=artifacts_dir,
             )
@@ -1209,6 +1338,16 @@ def evaluate_workload(
                 weight=weight,
                 required=required,
                 failure_kind="timeout",
+                messages=(str(exc),),
+                artifacts_dir=artifacts_dir,
+                baseline_entry=baseline_entry,
+            )
+        except _EnvironmentUnavailableError as exc:
+            return _failed_workload_report(
+                workload.id,
+                weight=weight,
+                required=required,
+                failure_kind="environment_unavailable",
                 messages=(str(exc),),
                 artifacts_dir=artifacts_dir,
                 baseline_entry=baseline_entry,
@@ -1225,55 +1364,50 @@ def evaluate_workload(
             )
 
     ctx = _benchmark_context()
-    queue = ctx.Queue()
-    process = ctx.Process(
-        target=_workload_worker,
-        args=(queue, asdict(workload)),
-        kwargs={
-            "weight": weight,
-            "required": required,
-            "repetitions": repetitions,
-            "warmups": warmups,
-            "baseline_entry": baseline_entry,
-            "artifacts_dir": artifacts_dir,
-        },
-    )
-    process.start()
-    process.join(timeout=None if timeout_ms is None else timeout_ms / 1000)
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=1)
-        if process.is_alive():
-            process.kill()
-            process.join(timeout=1)
+    try:
+        payload = _run_process_job(
+            ctx=ctx,
+            target=_workload_worker,
+            args=(asdict(workload),),
+            kwargs={
+                "weight": weight,
+                "required": required,
+                "repetitions": repetitions,
+                "warmups": warmups,
+                "timeout_ms": timeout_ms,
+                "baseline_entry": baseline_entry,
+                "artifacts_dir": artifacts_dir,
+            },
+            timeout_ms=timeout_ms,
+            timeout_message=f"workload timed out after {timeout_ms} ms",
+        )
+    except TimeoutError as exc:
         return _failed_workload_report(
             workload.id,
             weight=weight,
             required=required,
             failure_kind="timeout",
-            messages=(f"workload timed out after {timeout_ms} ms",),
+            messages=(str(exc),),
             artifacts_dir=artifacts_dir,
             baseline_entry=baseline_entry,
         )
-    if process.exitcode != 0:
-        return _failed_workload_report(
-            workload.id,
-            weight=weight,
-            required=required,
-            failure_kind="worker_exit",
-            messages=(f"benchmark worker failed with exit code {process.exitcode}",),
-            artifacts_dir=artifacts_dir,
-            baseline_entry=baseline_entry,
-        )
-    try:
-        payload = queue.get(timeout=0.1)
-    except Empty:
+    except _WorkerProtocolError as exc:
         return _failed_workload_report(
             workload.id,
             weight=weight,
             required=required,
             failure_kind="worker_protocol_error",
-            messages=("benchmark worker exited without producing a result",),
+            messages=(str(exc),),
+            artifacts_dir=artifacts_dir,
+            baseline_entry=baseline_entry,
+        )
+    except _WorkerExitError as exc:
+        return _failed_workload_report(
+            workload.id,
+            weight=weight,
+            required=required,
+            failure_kind="worker_exit",
+            messages=(str(exc),),
             artifacts_dir=artifacts_dir,
             baseline_entry=baseline_entry,
         )
@@ -1282,12 +1416,16 @@ def evaluate_workload(
             workload.id,
             weight=weight,
             required=required,
-            failure_kind="worker_error",
+            failure_kind=payload.get("failure_kind", "worker_error"),
             messages=(payload["error"],),
             artifacts_dir=artifacts_dir,
             baseline_entry=baseline_entry,
         )
     return _workload_report_from_dict(payload["report"])
+
+
+def _is_environment_unavailable_optional(report: WorkloadReport) -> bool:
+    return not report.required and report.failure_kind == "environment_unavailable"
 
 
 def _suite_score(
@@ -1303,6 +1441,8 @@ def _suite_score(
     total_weight = 0.0
     weighted_stability_logs: list[float] = []
     for report in reports:
+        if _is_environment_unavailable_optional(report):
+            continue
         if report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
             continue
         ratio_floor = 1e-9
@@ -1330,6 +1470,8 @@ def _suite_stability_penalty(reports: Iterable[WorkloadReport]) -> float | None:
     weighted_logs: list[float] = []
     total_weight = 0.0
     for report in reports:
+        if _is_environment_unavailable_optional(report):
+            continue
         if report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
             continue
         weighted_logs.append(math.log(max(report.stability.penalty, 1e-9)) * report.weight)
@@ -1542,6 +1684,8 @@ def evaluate_suite(
             "passed": holdout_report["passed"],
             "srps": holdout_report["srps"],
         }
+
+    _validate_schema(main_report, "report.schema.json", label="benchmark report")
 
     if output_path:
         destination = Path(output_path)

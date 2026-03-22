@@ -136,6 +136,17 @@ def _print_human_report(report: dict[str, object]) -> None:
         )
 
 
+def _report_is_strict_success(report: dict[str, object]) -> bool:
+    if not report["passed"]:
+        return False
+    if report["srps"] is None:
+        return False
+    holdout = report["summary"].get("holdout")
+    if holdout is not None and holdout.get("srps") is None:
+        return False
+    return all(workload["baseline_effective_cost"] is not None for workload in report["workloads"])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -181,7 +192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.save_baseline:
             print(f"Baseline saved to {baseline_path}")
 
-    if args.strict and not report["passed"]:
+    if args.strict and not _report_is_strict_success(report):
         return 1
     return 0
 

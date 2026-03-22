@@ -5,6 +5,7 @@ from collections import deque
 from pathlib import Path
 import sys
 import textwrap
+import types
 
 import pytest
 
@@ -88,6 +89,118 @@ def test_load_workload_spec_rejects_invalid_schema(tmp_path):
                 "extract_spec": {},
                 "correctness": {},
                 "cost_weights": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid benchmark workload spec"):
+        load_workload_spec(workload_path)
+
+
+def test_load_suite_spec_rejects_negative_weight(tmp_path):
+    suite_path = tmp_path / "invalid_suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "name": "invalid",
+                "version": 1,
+                "workloads": [
+                    {"id": "static_extract", "weight": -0.1, "required": True},
+                    {"id": "text_similarity", "weight": 1.1, "required": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid benchmark suite spec"):
+        load_suite_spec(suite_path)
+
+
+def test_load_suite_spec_rejects_weights_that_do_not_sum_to_one(tmp_path):
+    suite_path = tmp_path / "invalid_suite.json"
+    suite_path.write_text(
+        json.dumps(
+            {
+                "name": "invalid",
+                "version": 1,
+                "workloads": [
+                    {"id": "static_extract", "weight": 0.2, "required": True},
+                    {"id": "text_similarity", "weight": 0.2, "required": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sum to 1.0"):
+        load_suite_spec(suite_path)
+
+
+def test_load_workload_spec_rejects_unknown_cost_weight_key(tmp_path):
+    workload_path = tmp_path / "invalid_workload.json"
+    workload_path.write_text(
+        json.dumps(
+            {
+                "id": "invalid",
+                "version": 1,
+                "kind": "static",
+                "fixture": "benchmarks/fixtures/static/catalog.html",
+                "expected": "benchmarks/expected/static_extract.expected.json",
+                "extract_spec": {
+                    "strategy": "record_css",
+                    "item_selector": ".product-card",
+                    "fields": {"title": ".title::text"},
+                },
+                "correctness": {
+                    "comparison": "exact",
+                    "required_fields": ["title"],
+                    "semantic_match_threshold": 1.0,
+                },
+                "cost_weights": {
+                    "wall_ms": 0.35,
+                    "cpu_ms": 0.25,
+                    "peak_rss_mb": 0.15,
+                    "load_ms": 0.1,
+                    "extract_ms": 0.15,
+                    "bogus": 1.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid benchmark workload spec"):
+        load_workload_spec(workload_path)
+
+
+def test_load_workload_spec_requires_all_cost_weight_keys(tmp_path):
+    workload_path = tmp_path / "invalid_workload.json"
+    workload_path.write_text(
+        json.dumps(
+            {
+                "id": "invalid",
+                "version": 1,
+                "kind": "static",
+                "fixture": "benchmarks/fixtures/static/catalog.html",
+                "expected": "benchmarks/expected/static_extract.expected.json",
+                "extract_spec": {
+                    "strategy": "record_css",
+                    "item_selector": ".product-card",
+                    "fields": {"title": ".title::text"},
+                },
+                "correctness": {
+                    "comparison": "exact",
+                    "required_fields": ["title"],
+                    "semantic_match_threshold": 1.0,
+                },
+                "cost_weights": {
+                    "wall_ms": 0.35,
+                    "cpu_ms": 0.25,
+                    "peak_rss_mb": 0.15,
+                    "load_ms": 0.1,
+                },
             }
         ),
         encoding="utf-8",
@@ -286,6 +399,112 @@ def test_suite_score_penalizes_failed_optional_workloads():
     assert failed_optional_score < all_passing_score
 
 
+def test_suite_score_treats_environment_unavailable_optional_workloads_neutrally():
+    passing_required = benchmarking.WorkloadReport(
+        id="required_ok",
+        required=True,
+        weight=0.7,
+        passed=True,
+        failure_kind=None,
+        score=100.0,
+        effective_cost=10.0,
+        baseline_effective_cost=10.0,
+        metrics=benchmarking.WorkloadMetrics(1.0, 1.0, 1.0, 1.0, 1.0, 1),
+        correctness=benchmarking.CorrectnessSummary(
+            passed=True,
+            item_count=1,
+            expected_item_count=1,
+            required_fields_match=True,
+            semantic_match=1.0,
+            non_empty=True,
+        ),
+        stability=benchmarking.StabilitySummary(
+            mean_ms=1.0,
+            median_ms=1.0,
+            p95_ms=1.0,
+            cv=0.0,
+            success_rate=1.0,
+            consistent_output=True,
+            penalty=1.0,
+        ),
+        artifacts={},
+    )
+    passing_optional = benchmarking.WorkloadReport(
+        id="optional_ok",
+        required=False,
+        weight=0.3,
+        passed=True,
+        failure_kind=None,
+        score=100.0,
+        effective_cost=10.0,
+        baseline_effective_cost=10.0,
+        metrics=benchmarking.WorkloadMetrics(1.0, 1.0, 1.0, 1.0, 1.0, 1),
+        correctness=benchmarking.CorrectnessSummary(
+            passed=True,
+            item_count=1,
+            expected_item_count=1,
+            required_fields_match=True,
+            semantic_match=1.0,
+            non_empty=True,
+        ),
+        stability=benchmarking.StabilitySummary(
+            mean_ms=1.0,
+            median_ms=1.0,
+            p95_ms=1.0,
+            cv=0.0,
+            success_rate=1.0,
+            consistent_output=True,
+            penalty=1.0,
+        ),
+        artifacts={},
+    )
+    skipped_optional = benchmarking._failed_workload_report(
+        "optional_skipped",
+        weight=0.3,
+        required=False,
+        failure_kind="environment_unavailable",
+        messages=("missing browser extras",),
+        baseline_entry={"effective_cost": 10.0},
+    )
+
+    all_passing_score = benchmarking._suite_score(
+        [passing_required, passing_optional],
+        correctness_passed=True,
+    )
+    skipped_optional_score = benchmarking._suite_score(
+        [passing_required, skipped_optional],
+        correctness_passed=True,
+    )
+
+    assert all_passing_score == 100.0
+    assert skipped_optional_score == all_passing_score
+
+
+def test_required_environment_unavailable_workload_still_fails_suite(monkeypatch):
+    real_evaluate_workload = benchmarking.evaluate_workload
+
+    def fake_evaluate_workload(workload, **kwargs):
+        if workload.id == "static_extract":
+            return benchmarking._failed_workload_report(
+                workload.id,
+                weight=kwargs["weight"],
+                required=kwargs["required"],
+                failure_kind="environment_unavailable",
+                messages=("required runtime is unavailable",),
+                baseline_entry=kwargs.get("baseline_entry"),
+                artifacts_dir=kwargs.get("artifacts_dir"),
+            )
+        return real_evaluate_workload(workload, **kwargs)
+
+    monkeypatch.setattr(benchmarking, "evaluate_workload", fake_evaluate_workload)
+
+    report = evaluate_suite("dev", repetitions=1, warmups=0)
+
+    assert report["passed"] is False
+    assert report["srps"] == 0.0
+    assert report["workloads"][0]["failure_kind"] == "environment_unavailable"
+
+
 def test_browser_suite_runs_browser_workloads():
     report = evaluate_suite("browser", repetitions=1, warmups=0)
 
@@ -455,6 +674,66 @@ def test_holdout_suite_contributes_generalization_summary(tmp_path):
     assert combined["srps"] is not None
     assert combined["summary"]["generalization_penalty"] > 0
     assert combined["summary"]["holdout"]["suite"] == "holdout"
+
+
+def test_evaluate_suite_revalidates_final_report_after_holdout_adjustments(monkeypatch):
+    validations = []
+
+    def fake_validate(payload, schema_name, *, label):
+        validations.append((schema_name, label, json.loads(json.dumps(payload))))
+
+    reports = iter(
+        [
+            {
+                "version": benchmarking.BENCHMARK_REPORT_VERSION,
+                "suite": "dev",
+                "suite_version": 1,
+                "passed": True,
+                "srps": 100.0,
+                "baseline": {"path": "benchmarks/baselines/dev.json", "version": benchmarking.BASELINE_SCHEMA_VERSION},
+                "environment": benchmarking.environment_metadata(),
+                "summary": {
+                    "correctness_passed": True,
+                    "generalization_penalty": 1.0,
+                    "stability_penalty": 1.0,
+                    "seed": None,
+                },
+                "workloads": [],
+            },
+            {
+                "version": benchmarking.BENCHMARK_REPORT_VERSION,
+                "suite": "holdout",
+                "suite_version": 1,
+                "passed": True,
+                "srps": 50.0,
+                "baseline": {"path": "benchmarks/baselines/holdout.json", "version": benchmarking.BASELINE_SCHEMA_VERSION},
+                "environment": benchmarking.environment_metadata(),
+                "summary": {
+                    "correctness_passed": True,
+                    "generalization_penalty": 1.0,
+                    "stability_penalty": 1.0,
+                    "seed": None,
+                },
+                "workloads": [],
+            },
+        ]
+    )
+
+    monkeypatch.setattr(benchmarking, "_evaluate_suite_core", lambda *args, **kwargs: next(reports))
+    monkeypatch.setattr(benchmarking, "_validate_schema", fake_validate)
+
+    report = evaluate_suite("dev", holdout_suite_name_or_path="holdout")
+
+    assert report["summary"]["holdout"]["suite"] == "holdout"
+    final_report_validations = [
+        payload
+        for schema_name, label, payload in validations
+        if schema_name == "report.schema.json" and label == "benchmark report"
+    ]
+    assert final_report_validations
+    assert final_report_validations[-1]["summary"]["holdout"]["suite"] == "holdout"
+    assert final_report_validations[-1]["summary"]["generalization_penalty"] == 0.5
+    assert final_report_validations[-1]["srps"] == 50.0
 
 
 def test_baseline_payload_shape():
@@ -665,6 +944,30 @@ def test_workload_exception_is_reported_in_json_report(tmp_path):
     )
 
 
+def test_evaluate_workload_reports_environment_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        benchmarking,
+        "_evaluate_workload_in_process",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            benchmarking._EnvironmentUnavailableError("missing browser extras")
+        ),
+    )
+
+    report = evaluate_workload(
+        load_workload_spec("browser_dynamic_extract"),
+        weight=1.0,
+        required=False,
+        repetitions=1,
+        warmups=0,
+        timeout_ms=None,
+        isolate_process=False,
+    )
+
+    assert report.passed is False
+    assert report.failure_kind == "environment_unavailable"
+    assert "missing browser extras" in " ".join(report.correctness.messages)
+
+
 def test_evaluate_workload_times_out_and_returns_failure(monkeypatch):
     class FakeQueue:
         def get(self):
@@ -711,6 +1014,56 @@ def test_evaluate_workload_times_out_and_returns_failure(monkeypatch):
         repetitions=1,
         warmups=0,
         timeout_ms=1,
+    )
+
+    assert report.passed is False
+    assert report.failure_kind == "timeout"
+    assert "timed out" in " ".join(report.correctness.messages)
+
+
+def test_evaluate_workload_times_out_when_warmup_worker_hangs(monkeypatch):
+    class FakeQueue:
+        def get(self, timeout=None):
+            raise AssertionError("queue.get should not be called on timeout")
+
+    class FakeProcess:
+        exitcode = None
+
+        def __init__(self):
+            self.terminated = False
+
+        def start(self):
+            return None
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return not self.terminated
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.terminated = True
+
+    class FakeContext:
+        def Queue(self):
+            return FakeQueue()
+
+        def Process(self, *args, **kwargs):
+            return FakeProcess()
+
+    monkeypatch.setattr(benchmarking, "_benchmark_context", lambda prefer_fork=False: FakeContext())
+
+    report = evaluate_workload(
+        load_workload_spec("static_extract"),
+        weight=1.0,
+        required=True,
+        repetitions=1,
+        warmups=1,
+        timeout_ms=1,
+        isolate_process=False,
     )
 
     assert report.passed is False
@@ -819,6 +1172,52 @@ def test_benchmarking_import_survives_missing_resource_module(tmp_path):
     stdout_lines = result.stdout.strip().splitlines()
     assert stdout_lines[0] == "True"
     assert float(stdout_lines[1]) == 0.0
+
+
+def test_current_peak_rss_mb_uses_kilobytes_on_linux(monkeypatch):
+    class FakeUsage:
+        ru_maxrss = 2048
+
+    fake_resource = types.SimpleNamespace()
+    monkeypatch.setattr(benchmarking, "resource", fake_resource)
+    monkeypatch.setattr(benchmarking.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        benchmarking.resource,
+        "RUSAGE_SELF",
+        object(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        benchmarking.resource,
+        "getrusage",
+        lambda who: FakeUsage(),
+        raising=False,
+    )
+
+    assert benchmarking._current_peak_rss_mb() == 2.0
+
+
+def test_current_peak_rss_mb_uses_bytes_on_macos(monkeypatch):
+    class FakeUsage:
+        ru_maxrss = 2 * 1024 * 1024
+
+    fake_resource = types.SimpleNamespace()
+    monkeypatch.setattr(benchmarking, "resource", fake_resource)
+    monkeypatch.setattr(benchmarking.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        benchmarking.resource,
+        "RUSAGE_SELF",
+        object(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        benchmarking.resource,
+        "getrusage",
+        lambda who: FakeUsage(),
+        raising=False,
+    )
+
+    assert benchmarking._current_peak_rss_mb() == 2.0
 
 
 def test_evaluate_suite_api_works_from_plain_top_level_script(tmp_path):
@@ -985,6 +1384,19 @@ def test_semantic_comparison_can_pass_without_exact_match(tmp_path):
     assert report["passed"] is True
     assert report["workloads"][0]["correctness"]["semantic_match"] >= 0.9
     assert report["workloads"][0]["correctness"]["semantic_match"] < 1.0
+
+
+def test_semantic_match_score_is_order_insensitive_for_equivalent_records():
+    expected = [
+        {"title": "Alpha Product", "price": "$10.00", "url": "/products/a"},
+        {"title": "Beta Product", "price": "$12.00", "url": "/products/b"},
+    ]
+    actual = [
+        {"title": "Beta Product", "price": "$12.00", "url": "/products/b"},
+        {"title": "Alpha Product", "price": "$10.00", "url": "/products/a"},
+    ]
+
+    assert benchmarking._semantic_match_score(expected, actual) == 1.0
 
 
 def test_baseline_fingerprint_mismatch_disables_scoring(tmp_path):

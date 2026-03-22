@@ -125,6 +125,18 @@ def test_main_strict_mode_fails_on_regression(monkeypatch):
     assert exit_code == 1
 
 
+def test_main_strict_mode_fails_when_report_is_not_comparable(monkeypatch):
+    monkeypatch.setattr(
+        perf_benchmark,
+        "evaluate_suite",
+        lambda **_: _fake_report(passed=True, srps=None),
+    )
+
+    exit_code = perf_benchmark.main(["--strict"])
+
+    assert exit_code == 1
+
+
 def test_main_passes_workload_filter(monkeypatch):
     captured = {}
 
