@@ -468,7 +468,11 @@ def _fixture_server_root(fixture_paths: Sequence[str]) -> Path:
 
 
 def _benchmark_context(*, prefer_fork: bool = False):
-    if "fork" in multiprocessing.get_all_start_methods() and (prefer_fork or os.name != "nt"):
+    if (
+        "fork" in multiprocessing.get_all_start_methods()
+        and platform.system() == "Linux"
+        and (prefer_fork or os.name != "nt")
+    ):
         return multiprocessing.get_context("fork")
     return multiprocessing.get_context(multiprocessing.get_start_method(allow_none=True))
 
@@ -1299,13 +1303,13 @@ def _suite_score(
     total_weight = 0.0
     weighted_stability_logs: list[float] = []
     for report in reports:
-        if not report.passed:
-            continue
         if report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
             continue
-        if report.effective_cost <= 0:
-            continue
-        ratio = report.baseline_effective_cost / report.effective_cost
+        ratio_floor = 1e-9
+        if report.passed and report.effective_cost > 0:
+            ratio = max(ratio_floor, report.baseline_effective_cost / report.effective_cost)
+        else:
+            ratio = ratio_floor
         weighted_logs.append(math.log(ratio) * report.weight)
         weighted_stability_logs.append(math.log(max(report.stability.penalty, 1e-9)) * report.weight)
         total_weight += report.weight
@@ -1326,7 +1330,7 @@ def _suite_stability_penalty(reports: Iterable[WorkloadReport]) -> float | None:
     weighted_logs: list[float] = []
     total_weight = 0.0
     for report in reports:
-        if not report.passed or report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
+        if report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
             continue
         weighted_logs.append(math.log(max(report.stability.penalty, 1e-9)) * report.weight)
         total_weight += report.weight

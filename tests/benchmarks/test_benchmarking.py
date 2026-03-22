@@ -204,6 +204,88 @@ def test_release_suite_treats_browser_workloads_as_optional(monkeypatch):
     assert all(workload["passed"] is False for workload in failed_browser_reports)
 
 
+def test_suite_score_penalizes_failed_optional_workloads():
+    passing_required = benchmarking.WorkloadReport(
+        id="required_ok",
+        required=True,
+        weight=0.7,
+        passed=True,
+        failure_kind=None,
+        score=100.0,
+        effective_cost=10.0,
+        baseline_effective_cost=10.0,
+        metrics=benchmarking.WorkloadMetrics(1.0, 1.0, 1.0, 1.0, 1.0, 1),
+        correctness=benchmarking.CorrectnessSummary(
+            passed=True,
+            item_count=1,
+            expected_item_count=1,
+            required_fields_match=True,
+            semantic_match=1.0,
+            non_empty=True,
+        ),
+        stability=benchmarking.StabilitySummary(
+            mean_ms=1.0,
+            median_ms=1.0,
+            p95_ms=1.0,
+            cv=0.0,
+            success_rate=1.0,
+            consistent_output=True,
+            penalty=1.0,
+        ),
+        artifacts={},
+    )
+    passing_optional = benchmarking.WorkloadReport(
+        id="optional_ok",
+        required=False,
+        weight=0.3,
+        passed=True,
+        failure_kind=None,
+        score=100.0,
+        effective_cost=10.0,
+        baseline_effective_cost=10.0,
+        metrics=benchmarking.WorkloadMetrics(1.0, 1.0, 1.0, 1.0, 1.0, 1),
+        correctness=benchmarking.CorrectnessSummary(
+            passed=True,
+            item_count=1,
+            expected_item_count=1,
+            required_fields_match=True,
+            semantic_match=1.0,
+            non_empty=True,
+        ),
+        stability=benchmarking.StabilitySummary(
+            mean_ms=1.0,
+            median_ms=1.0,
+            p95_ms=1.0,
+            cv=0.0,
+            success_rate=1.0,
+            consistent_output=True,
+            penalty=1.0,
+        ),
+        artifacts={},
+    )
+    failed_optional = benchmarking._failed_workload_report(
+        "optional_failed",
+        weight=0.3,
+        required=False,
+        failure_kind="worker_error",
+        messages=("failed",),
+        baseline_entry={"effective_cost": 10.0},
+    )
+
+    all_passing_score = benchmarking._suite_score(
+        [passing_required, passing_optional],
+        correctness_passed=True,
+    )
+    failed_optional_score = benchmarking._suite_score(
+        [passing_required, failed_optional],
+        correctness_passed=True,
+    )
+
+    assert all_passing_score == 100.0
+    assert failed_optional_score is not None
+    assert failed_optional_score < all_passing_score
+
+
 def test_browser_suite_runs_browser_workloads():
     report = evaluate_suite("browser", repetitions=1, warmups=0)
 
@@ -740,6 +822,9 @@ def test_benchmarking_import_survives_missing_resource_module(tmp_path):
 
 
 def test_evaluate_suite_api_works_from_plain_top_level_script(tmp_path):
+    if benchmarking.platform.system() != "Linux":
+        pytest.skip("plain top-level script support is only guaranteed on Linux")
+
     script_path = tmp_path / "plain_benchmark_script.py"
     script_path.write_text(
         "from scrapling.benchmarking import evaluate_suite\n"
@@ -764,6 +849,26 @@ def test_evaluate_suite_api_works_from_plain_top_level_script(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "True"
+
+
+def test_benchmark_context_respects_default_on_macos(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(benchmarking.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(benchmarking.multiprocessing, "get_all_start_methods", lambda: ["fork", "spawn"])
+    monkeypatch.setattr(benchmarking.multiprocessing, "get_start_method", lambda allow_none=True: "spawn")
+    monkeypatch.setattr(
+        benchmarking.multiprocessing,
+        "get_context",
+        lambda method=None: calls.append(method) or method,
+    )
+
+    ctx = benchmarking._benchmark_context()
+    warmup_ctx = benchmarking._benchmark_context(prefer_fork=True)
+
+    assert ctx == "spawn"
+    assert warmup_ctx == "spawn"
+    assert calls == ["spawn", "spawn"]
 
 
 def test_in_process_mode_converts_exceptions_to_failed_report(tmp_path):
