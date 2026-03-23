@@ -201,14 +201,6 @@ def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
         check=True,
     )
     installed_benchmarks = install_dir / "benchmarks"
-    if installed_benchmarks.exists():
-        subprocess.run(
-            [sys.executable, "-c", "import shutil, sys; shutil.rmtree(sys.argv[1])", str(installed_benchmarks)],
-            cwd=work_dir,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
 
     script = textwrap.dedent(
         """
@@ -232,6 +224,7 @@ def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
         check=False,
     )
 
+    assert not installed_benchmarks.exists()
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout.strip())
     assert payload["module_file"].startswith(str(install_dir))

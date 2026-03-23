@@ -120,14 +120,6 @@ scrapling = [
     "_benchmark_assets/**/*.html",
 ]
 
-[tool.setuptools.data-files]
-"benchmarks/schema" = ["benchmarks/schema/*.json"]
-"benchmarks/suites" = ["benchmarks/suites/*.json"]
-"benchmarks/workloads" = ["benchmarks/workloads/*.json"]
-"benchmarks/expected" = ["benchmarks/expected/*.json"]
-"benchmarks/fixtures/static" = ["benchmarks/fixtures/static/*.html"]
-"benchmarks/fixtures/browser" = ["benchmarks/fixtures/browser/*.html"]
-
 [tool.mypy]
 python_version = "3.10"
 warn_unused_configs = true
