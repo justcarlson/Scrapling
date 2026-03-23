@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"price": "$71.00", "title": "Protected Item 1", "url": "/protected/item-1"},
+    {"price": "$72.00", "title": "Protected Item 2", "url": "/protected/item-2"},
+    {"price": "$73.00", "title": "Protected Item 3", "url": "/protected/item-3"}
+  ]
+}

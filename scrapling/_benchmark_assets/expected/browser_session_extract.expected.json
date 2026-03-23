@@ -1,0 +1,9 @@
+{
+  "items": [
+    {
+      "cart_count": "4",
+      "login_user": "pat@example.com",
+      "session_status": "active"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scrapling.benchmarking import (
+    _report_is_strict_success,
     evaluate_suite,
     list_suite_names,
     list_workload_names,
@@ -25,9 +26,7 @@ DEFAULT_ARTIFACTS_DIR = Path(".benchmarks/artifacts")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run Scrapling's benchmark evaluator."
-    )
+    parser = argparse.ArgumentParser(description="Run Scrapling's benchmark evaluator.")
     parser.add_argument(
         "--suite",
         default="dev",
@@ -91,8 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help=(
-            "Return a non-zero exit code when required correctness gates fail "
-            "or the run is not baseline-comparable."
+            "Return a non-zero exit code when required correctness gates fail or the run is not baseline-comparable."
         ),
     )
     parser.add_argument(
@@ -139,17 +137,6 @@ def _print_human_report(report: dict[str, object]) -> None:
         )
 
 
-def _report_is_strict_success(report: dict[str, object]) -> bool:
-    if not report["passed"]:
-        return False
-    if report["srps"] is None:
-        return False
-    holdout = report["summary"].get("holdout")
-    if holdout is not None and holdout.get("srps") is None:
-        return False
-    return all(workload["baseline_effective_cost"] is not None for workload in report["workloads"])
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -167,9 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline_path = args.baseline or f"benchmarks/baselines/{Path(args.suite).stem}.json"
     holdout_baseline_path = None
     if args.holdout_suite:
-        holdout_baseline_path = args.holdout_baseline or (
-            f"benchmarks/baselines/{Path(args.holdout_suite).stem}.json"
-        )
+        holdout_baseline_path = args.holdout_baseline or (f"benchmarks/baselines/{Path(args.holdout_suite).stem}.json")
 
     report = evaluate_suite(
         suite_name_or_path=args.suite,
@@ -184,18 +169,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         holdout_baseline_path=holdout_baseline_path,
     )
 
-    if args.save_baseline:
-        save_baseline(baseline_path, report)
+    strict_success = _report_is_strict_success(report)
+
+    baseline_saved = False
+    if args.save_baseline and (not args.strict or strict_success):
+        try:
+            save_baseline(baseline_path, report)
+        except ValueError as exc:
+            if args.strict:
+                raise
+            print(str(exc), file=sys.stderr)
+        else:
+            baseline_saved = True
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         _print_human_report(report)
         print(f"\nReport written to {args.output}")
-        if args.save_baseline:
+        if baseline_saved:
             print(f"Baseline saved to {baseline_path}")
 
-    if args.strict and not _report_is_strict_success(report):
+    if args.strict and not strict_success:
         return 1
     return 0
 

@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <body>
+    <main id="session-dashboard">
+      <h1>Holdout session dashboard</h1>
+      <div id="welcome">Welcome <strong></strong></div>
+      <div id="session-status"></div>
+      <div id="cart-count"></div>
+    </main>
+    <script>
+      function readCookie(name) {
+        const parts = document.cookie.split(';').map(v => v.trim());
+        for (const part of parts) {
+          if (part.startsWith(name + '=')) {
+            return part.slice(name.length + 1);
+          }
+        }
+        return '';
+      }
+      const user = localStorage.getItem('bench_user');
+      const cartCount = localStorage.getItem('cart_count');
+      const status = readCookie('session_status');
+      document.querySelector('#welcome strong').textContent = user || '';
+      document.querySelector('#session-status').textContent = status || '';
+      document.querySelector('#cart-count').textContent = cartCount || '';
+    </script>
+  </body>
+</html>
