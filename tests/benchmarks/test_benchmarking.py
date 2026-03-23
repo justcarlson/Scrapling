@@ -1,11 +1,14 @@
 import json
 import os
+import re
 import subprocess
 from collections import deque
 from pathlib import Path
 import sys
 import textwrap
 import types
+from urllib.parse import urljoin
+from urllib.request import urlopen
 
 import pytest
 
@@ -230,6 +233,48 @@ def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
     assert payload["module_file"].startswith(str(install_dir))
     assert "dev" in payload["suite_names"]
     assert payload["passed"] is True
+
+
+@pytest.mark.parametrize(
+    ("workload_name", "expected_text"),
+    [
+        ("browser_session_extract", "Session dashboard"),
+        ("holdout_browser_session_extract", "Holdout session dashboard"),
+    ],
+)
+def test_packaged_browser_session_redirects_stay_within_fixture_server(
+    monkeypatch,
+    tmp_path,
+    workload_name,
+    expected_text,
+):
+    empty_root = tmp_path / "empty-root"
+    empty_root.mkdir()
+    packaged_root = Path(__file__).resolve().parents[2] / "scrapling" / "_benchmark_assets"
+
+    monkeypatch.setattr(benchmarking, "REPO_ROOT", empty_root)
+    monkeypatch.setattr(benchmarking, "BENCHMARKS_ROOT", empty_root / "benchmarks")
+    monkeypatch.setattr(benchmarking, "SCHEMA_ROOT", empty_root / "benchmarks" / "schema")
+    monkeypatch.setattr(benchmarking, "SUITES_ROOT", empty_root / "benchmarks" / "suites")
+    monkeypatch.setattr(benchmarking, "WORKLOADS_ROOT", empty_root / "benchmarks" / "workloads")
+    monkeypatch.setattr(benchmarking, "_packaged_benchmarks_root", lambda: packaged_root)
+    benchmarking._schema_payload.cache_clear()
+
+    workload = load_workload_spec(workload_name)
+    match = re.search(
+        r"window\.location\.href\s*=\s*['\"]([^'\"]+)['\"]",
+        Path(workload.fixture).read_text(encoding="utf-8"),
+    )
+
+    assert match is not None
+    redirect_target = match.group(1)
+
+    with benchmarking.LocalFixtureServer(benchmarking._fixture_server_root((workload.fixture,))) as server:
+        destination = urljoin(server.url_for(workload.fixture), redirect_target)
+        with urlopen(destination) as response:
+            body = response.read().decode("utf-8")
+
+    assert expected_text in body
 
 
 def test_load_suite_and_workload_specs():
