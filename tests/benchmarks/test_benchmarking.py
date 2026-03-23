@@ -1,11 +1,14 @@
 import json
 import os
+import re
 import subprocess
 from collections import deque
 from pathlib import Path
 import sys
 import textwrap
 import types
+from urllib.parse import urljoin
+from urllib.request import urlopen
 
 import pytest
 
@@ -167,7 +170,7 @@ def test_repo_checkout_assets_win_over_packaged_assets(monkeypatch, tmp_path):
     assert suite.workloads[0].id == "repo_workload"
 
 
-def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
+def _build_and_install_wheel(tmp_path):
     dist_dir = tmp_path / "dist"
     install_dir = tmp_path / "install"
     work_dir = tmp_path / "work"
@@ -200,15 +203,12 @@ def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
         text=True,
         check=True,
     )
+    return install_dir, work_dir
+
+
+def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
+    install_dir, work_dir = _build_and_install_wheel(tmp_path)
     installed_benchmarks = install_dir / "benchmarks"
-    if installed_benchmarks.exists():
-        subprocess.run(
-            [sys.executable, "-c", "import shutil, sys; shutil.rmtree(sys.argv[1])", str(installed_benchmarks)],
-            cwd=work_dir,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
 
     script = textwrap.dedent(
         """
@@ -232,11 +232,102 @@ def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
         check=False,
     )
 
+    assert not installed_benchmarks.exists()
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout.strip())
     assert payload["module_file"].startswith(str(install_dir))
     assert "dev" in payload["suite_names"]
     assert payload["passed"] is True
+
+
+@pytest.mark.parametrize(
+    ("workload_name", "expected_text"),
+    [
+        ("browser_session_extract", "Session dashboard"),
+        ("holdout_browser_session_extract", "Holdout session dashboard"),
+    ],
+)
+def test_installed_wheel_packaged_browser_redirects_resolve(tmp_path, workload_name, expected_text):
+    install_dir, work_dir = _build_and_install_wheel(tmp_path)
+    installed_benchmarks = install_dir / "benchmarks"
+
+    script = textwrap.dedent(
+        f"""
+        import json
+        from pathlib import Path
+        from urllib.parse import urljoin
+        from urllib.request import urlopen
+
+        import scrapling.benchmarking as b
+
+        workload = b.load_workload_spec({workload_name!r})
+        source = Path(workload.fixture).read_text(encoding="utf-8")
+        redirect_target = source.split("window.location.href = '", 1)[1].split("'", 1)[0]
+
+        with b.LocalFixtureServer(b._fixture_server_root((workload.fixture,))) as server:
+            destination = urljoin(server.url_for(workload.fixture), redirect_target)
+            with urlopen(destination) as response:
+                body = response.read().decode("utf-8")
+
+        print(json.dumps({{"module_file": b.__file__, "body": body}}))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=work_dir,
+        env={**os.environ, "PYTHONPATH": str(install_dir)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert not installed_benchmarks.exists()
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip())
+    assert payload["module_file"].startswith(str(install_dir))
+    assert expected_text in payload["body"]
+
+
+@pytest.mark.parametrize(
+    ("workload_name", "expected_text"),
+    [
+        ("browser_session_extract", "Session dashboard"),
+        ("holdout_browser_session_extract", "Holdout session dashboard"),
+    ],
+)
+def test_packaged_browser_session_redirects_stay_within_fixture_server(
+    monkeypatch,
+    tmp_path,
+    workload_name,
+    expected_text,
+):
+    empty_root = tmp_path / "empty-root"
+    empty_root.mkdir()
+    packaged_root = Path(__file__).resolve().parents[2] / "scrapling" / "_benchmark_assets"
+
+    monkeypatch.setattr(benchmarking, "REPO_ROOT", empty_root)
+    monkeypatch.setattr(benchmarking, "BENCHMARKS_ROOT", empty_root / "benchmarks")
+    monkeypatch.setattr(benchmarking, "SCHEMA_ROOT", empty_root / "benchmarks" / "schema")
+    monkeypatch.setattr(benchmarking, "SUITES_ROOT", empty_root / "benchmarks" / "suites")
+    monkeypatch.setattr(benchmarking, "WORKLOADS_ROOT", empty_root / "benchmarks" / "workloads")
+    monkeypatch.setattr(benchmarking, "_packaged_benchmarks_root", lambda: packaged_root)
+    benchmarking._schema_payload.cache_clear()
+
+    workload = load_workload_spec(workload_name)
+    match = re.search(
+        r"window\.location\.href\s*=\s*['\"]([^'\"]+)['\"]",
+        Path(workload.fixture).read_text(encoding="utf-8"),
+    )
+
+    assert match is not None
+    redirect_target = match.group(1)
+
+    with benchmarking.LocalFixtureServer(benchmarking._fixture_server_root((workload.fixture,))) as server:
+        destination = urljoin(server.url_for(workload.fixture), redirect_target)
+        with urlopen(destination) as response:
+            body = response.read().decode("utf-8")
+
+    assert expected_text in body
 
 
 def test_load_suite_and_workload_specs():

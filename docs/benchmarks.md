@@ -141,7 +141,7 @@ benchmarks/
   baselines/
 ```
 
-Built-in benchmark assets are also shipped inside the `scrapling` package under `scrapling._benchmark_assets`. In a source checkout, repo-local `benchmarks/` assets take precedence so local benchmark edits are picked up immediately. In install-like environments without the repo asset tree, the evaluator falls back to the packaged assets.
+Built-in benchmark assets are also shipped inside the `scrapling` package under `scrapling._benchmark_assets`. Installed wheels rely on those packaged assets directly and no longer install a duplicate top-level `benchmarks/` tree. In a source checkout, repo-local `benchmarks/` assets still take precedence so local benchmark edits are picked up immediately. In install-like environments without the repo asset tree, the evaluator falls back to the packaged assets.
 
 The current implementation uses:
 
