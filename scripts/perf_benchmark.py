@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scrapling.benchmarking import (
+    _report_is_strict_success,
     evaluate_suite,
     list_suite_names,
     list_workload_names,
@@ -138,18 +139,6 @@ def _print_human_report(report: dict[str, object]) -> None:
             f"{score:>10}"
         )
 
-
-def _report_is_strict_success(report: dict[str, object]) -> bool:
-    if not report["passed"]:
-        return False
-    if report["srps"] is None:
-        return False
-    holdout = report["summary"].get("holdout")
-    if holdout is not None and holdout.get("srps") is None:
-        return False
-    return all(workload["baseline_effective_cost"] is not None for workload in report["workloads"])
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -184,18 +173,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         holdout_baseline_path=holdout_baseline_path,
     )
 
-    if args.save_baseline:
+    strict_success = _report_is_strict_success(report)
+
+    baseline_saved = False
+    if args.save_baseline and (not args.strict or strict_success):
         save_baseline(baseline_path, report)
+        baseline_saved = True
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         _print_human_report(report)
         print(f"\nReport written to {args.output}")
-        if args.save_baseline:
+        if baseline_saved:
             print(f"Baseline saved to {baseline_path}")
 
-    if args.strict and not _report_is_strict_success(report):
+    if args.strict and not strict_success:
         return 1
     return 0
 

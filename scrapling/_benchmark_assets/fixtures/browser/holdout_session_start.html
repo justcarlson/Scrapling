@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+  <body>
+    <main id="session-start">Holdout session bootstrap</main>
+    <script>
+      localStorage.setItem('bench_user', 'alex@example.com');
+      localStorage.setItem('cart_count', '7');
+      document.cookie = 'session_status=trial; path=/';
+      setTimeout(() => {
+        window.location.href = '/benchmarks/fixtures/browser/holdout_session_dashboard.html';
+      }, 50);
+    </script>
+  </body>
+</html>

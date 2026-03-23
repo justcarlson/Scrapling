@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"price": "$81.00", "title": "Dynamic Widget 1", "url": "/dynamic/item-1"},
+    {"price": "$82.00", "title": "Dynamic Widget 2", "url": "/dynamic/item-2"},
+    {"price": "$83.00", "title": "Dynamic Widget 3", "url": "/dynamic/item-3"}
+  ]
+}

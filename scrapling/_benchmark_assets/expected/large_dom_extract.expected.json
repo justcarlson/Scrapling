@@ -1,0 +1,22 @@
+{
+  "items": [
+    {"price": "$10.00", "title": "Alpha 01", "url": "/products/alpha-01"},
+    {"price": "$11.00", "title": "Alpha 02", "url": "/products/alpha-02"},
+    {"price": "$12.00", "title": "Alpha 03", "url": "/products/alpha-03"},
+    {"price": "$13.00", "title": "Alpha 04", "url": "/products/alpha-04"},
+    {"price": "$14.00", "title": "Alpha 05", "url": "/products/alpha-05"},
+    {"price": "$15.00", "title": "Alpha 06", "url": "/products/alpha-06"},
+    {"price": "$20.00", "title": "Beta 01", "url": "/products/beta-01"},
+    {"price": "$21.00", "title": "Beta 02", "url": "/products/beta-02"},
+    {"price": "$22.00", "title": "Beta 03", "url": "/products/beta-03"},
+    {"price": "$23.00", "title": "Beta 04", "url": "/products/beta-04"},
+    {"price": "$24.00", "title": "Beta 05", "url": "/products/beta-05"},
+    {"price": "$25.00", "title": "Beta 06", "url": "/products/beta-06"},
+    {"price": "$30.00", "title": "Gamma 01", "url": "/products/gamma-01"},
+    {"price": "$31.00", "title": "Gamma 02", "url": "/products/gamma-02"},
+    {"price": "$32.00", "title": "Gamma 03", "url": "/products/gamma-03"},
+    {"price": "$33.00", "title": "Gamma 04", "url": "/products/gamma-04"},
+    {"price": "$34.00", "title": "Gamma 05", "url": "/products/gamma-05"},
+    {"price": "$35.00", "title": "Gamma 06", "url": "/products/gamma-06"}
+  ]
+}

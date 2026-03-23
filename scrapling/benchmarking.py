@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import gc
 import hashlib
 import http.server
@@ -11,7 +12,9 @@ import os
 import platform
 import signal
 from difflib import SequenceMatcher
+from contextlib import ExitStack
 from functools import lru_cache
+from importlib import resources
 from queue import Empty
 import statistics
 import threading
@@ -43,6 +46,9 @@ BENCHMARKS_ROOT = REPO_ROOT / "benchmarks"
 SCHEMA_ROOT = BENCHMARKS_ROOT / "schema"
 SUITES_ROOT = BENCHMARKS_ROOT / "suites"
 WORKLOADS_ROOT = BENCHMARKS_ROOT / "workloads"
+BENCHMARK_ASSET_PACKAGE = "scrapling._benchmark_assets"
+_RESOURCE_STACK = ExitStack()
+atexit.register(_RESOURCE_STACK.close)
 
 try:
     import resource
@@ -141,6 +147,14 @@ class WorkloadReport:
     artifacts: Mapping[str, str]
 
 
+@dataclass(frozen=True)
+class AcceptancePolicy:
+    neutral_skip: bool
+    baseline_comparable: bool
+    baseline_writable: bool
+    baseline_acceptable: bool
+
+
 class _WorkerExitError(RuntimeError):
     pass
 
@@ -199,7 +213,35 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 @lru_cache(maxsize=8)
 def _schema_payload(name: str) -> dict[str, Any]:
-    return _load_json(SCHEMA_ROOT / name)
+    return _load_json(_schema_root() / name)
+
+
+@lru_cache(maxsize=1)
+def _packaged_benchmarks_root() -> Path | None:
+    try:
+        traversable = resources.files(BENCHMARK_ASSET_PACKAGE)
+    except (ModuleNotFoundError, FileNotFoundError):
+        return None
+    return _RESOURCE_STACK.enter_context(resources.as_file(traversable))
+
+
+def _builtin_benchmarks_root() -> Path:
+    packaged_root = _packaged_benchmarks_root()
+    if packaged_root is not None and packaged_root.exists():
+        return packaged_root
+    return BENCHMARKS_ROOT
+
+
+def _schema_root() -> Path:
+    return _builtin_benchmarks_root() / "schema"
+
+
+def _suites_root() -> Path:
+    return _builtin_benchmarks_root() / "suites"
+
+
+def _workloads_root() -> Path:
+    return _builtin_benchmarks_root() / "workloads"
 
 
 def _matches_schema_type(expected: str, value: Any) -> bool:
@@ -344,6 +386,14 @@ def _resolve_json_path(path_or_name: str | Path, default_root: Path) -> Path:
         resolved = (REPO_ROOT / candidate).resolve()
         if resolved.exists():
             return resolved
+        try:
+            builtin_relative = candidate.relative_to("benchmarks")
+        except ValueError:
+            builtin_relative = None
+        if builtin_relative is not None:
+            packaged_candidate = (_builtin_benchmarks_root() / builtin_relative).resolve()
+            if packaged_candidate.exists():
+                return packaged_candidate
     default_candidate = default_root / f"{candidate.stem}.json"
     if default_candidate.exists():
         return default_candidate.resolve()
@@ -357,6 +407,14 @@ def _resolve_relative(path_value: str, base_path: Path) -> Path:
     repo_candidate = (REPO_ROOT / path).resolve()
     if repo_candidate.exists():
         return repo_candidate
+    try:
+        builtin_relative = path.relative_to("benchmarks")
+    except ValueError:
+        builtin_relative = None
+    if builtin_relative is not None:
+        packaged_candidate = (_builtin_benchmarks_root() / builtin_relative).resolve()
+        if packaged_candidate.exists():
+            return packaged_candidate
     return (base_path.parent / path).resolve()
 
 
@@ -377,19 +435,21 @@ def _resolve_suite_workload_ref(path_value: str, suite_path: Path) -> str:
 
 
 def list_suite_names() -> list[str]:
-    if not SUITES_ROOT.exists():
+    suites_root = _suites_root()
+    if not suites_root.exists():
         return []
-    return sorted(path.stem for path in SUITES_ROOT.glob("*.json"))
+    return sorted(path.stem for path in suites_root.glob("*.json"))
 
 
 def list_workload_names() -> list[str]:
-    if not WORKLOADS_ROOT.exists():
+    workloads_root = _workloads_root()
+    if not workloads_root.exists():
         return []
-    return sorted(path.stem for path in WORKLOADS_ROOT.glob("*.json"))
+    return sorted(path.stem for path in workloads_root.glob("*.json"))
 
 
 def load_workload_spec(path_or_name: str | Path) -> WorkloadSpec:
-    spec_path = _resolve_json_path(path_or_name, WORKLOADS_ROOT)
+    spec_path = _resolve_json_path(path_or_name, _workloads_root())
     payload = _load_json(spec_path)
     _validate_schema(payload, "workload.schema.json", label="benchmark workload spec")
     _validate_workload_invariants(payload)
@@ -414,7 +474,7 @@ def load_suite_spec(
     suite_name_or_path: str | Path = "dev",
     workload_filter: Sequence[str] | None = None,
 ) -> SuiteSpec:
-    suite_path = _resolve_json_path(suite_name_or_path, SUITES_ROOT)
+    suite_path = _resolve_json_path(suite_name_or_path, _suites_root())
     payload = _load_json(suite_path)
     _validate_schema(payload, "suite.schema.json", label="benchmark suite spec")
     _validate_suite_invariants(payload)
@@ -1317,6 +1377,13 @@ def _compatible_baseline_entry(
     return baseline_entry
 
 
+def _validate_execution_inputs(*, repetitions: int, warmups: int) -> None:
+    if repetitions <= 0:
+        raise ValueError("repetitions must be greater than zero")
+    if warmups < 0:
+        raise ValueError("warmups cannot be negative")
+
+
 def evaluate_workload(
     workload: WorkloadSpec,
     *,
@@ -1329,6 +1396,7 @@ def evaluate_workload(
     timeout_ms: int | None = DEFAULT_TIMEOUT_MS,
     isolate_process: bool = True,
 ) -> WorkloadReport:
+    _validate_execution_inputs(repetitions=repetitions, warmups=warmups)
     baseline_entry = _compatible_baseline_entry(workload, baseline_entry)
     if not isolate_process:
         try:
@@ -1436,8 +1504,88 @@ def evaluate_workload(
     return _workload_report_from_dict(payload["report"])
 
 
+def _acceptance_policy(
+    *,
+    required: bool,
+    failure_kind: str | None,
+    passed: bool,
+    effective_cost: float,
+    baseline_effective_cost: float | None,
+) -> AcceptancePolicy:
+    neutral_skip = (not required) and failure_kind == "environment_unavailable"
+    baseline_comparable = neutral_skip or (
+        baseline_effective_cost is not None and baseline_effective_cost > 0
+    )
+    baseline_writable = bool(passed) and effective_cost > 0
+    baseline_acceptable = neutral_skip or baseline_writable
+    return AcceptancePolicy(
+        neutral_skip=neutral_skip,
+        baseline_comparable=baseline_comparable,
+        baseline_writable=baseline_writable,
+        baseline_acceptable=baseline_acceptable,
+    )
+
+
+def _acceptance_policy_for_report(report: WorkloadReport) -> AcceptancePolicy:
+    return _acceptance_policy(
+        required=report.required,
+        failure_kind=report.failure_kind,
+        passed=report.passed,
+        effective_cost=report.effective_cost,
+        baseline_effective_cost=report.baseline_effective_cost,
+    )
+
+
+def _acceptance_policy_for_payload(workload: Mapping[str, Any]) -> AcceptancePolicy:
+    return _acceptance_policy(
+        required=bool(workload["required"]),
+        failure_kind=workload.get("failure_kind"),
+        passed=bool(workload["passed"]),
+        effective_cost=float(workload["effective_cost"]),
+        baseline_effective_cost=(
+            None
+            if workload.get("baseline_effective_cost") is None
+            else float(workload["baseline_effective_cost"])
+        ),
+    )
+
+
 def _is_environment_unavailable_optional(report: WorkloadReport) -> bool:
-    return not report.required and report.failure_kind == "environment_unavailable"
+    return _acceptance_policy_for_report(report).neutral_skip
+
+
+def _is_neutral_workload_payload(workload: Mapping[str, Any]) -> bool:
+    return _acceptance_policy_for_payload(workload).neutral_skip
+
+
+def _is_baseline_comparable_workload(report: WorkloadReport) -> bool:
+    return _acceptance_policy_for_report(report).baseline_comparable
+
+
+def _is_baseline_comparable_workload_payload(workload: Mapping[str, Any]) -> bool:
+    return _acceptance_policy_for_payload(workload).baseline_comparable
+
+
+def _is_report_baseline_comparable_payload(report: Mapping[str, Any]) -> bool:
+    return all(
+        _acceptance_policy_for_payload(workload).baseline_comparable
+        for workload in report["workloads"]
+    )
+
+
+def _report_is_strict_success(report: Mapping[str, Any]) -> bool:
+    if not bool(report["passed"]):
+        return False
+    if report["srps"] is None:
+        return False
+    if not bool(report["summary"]["baseline_comparable"]):
+        return False
+    holdout = report["summary"].get("holdout")
+    if holdout is not None and (
+        holdout.get("srps") is None or not bool(holdout.get("baseline_comparable"))
+    ):
+        return False
+    return _is_report_baseline_comparable_payload(report)
 
 
 def _suite_score(
@@ -1453,9 +1601,10 @@ def _suite_score(
     total_weight = 0.0
     weighted_stability_logs: list[float] = []
     for report in reports:
-        if _is_environment_unavailable_optional(report):
+        policy = _acceptance_policy_for_report(report)
+        if policy.neutral_skip:
             continue
-        if report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
+        if not policy.baseline_comparable:
             continue
         ratio_floor = 1e-9
         if report.passed and report.effective_cost > 0:
@@ -1482,9 +1631,10 @@ def _suite_stability_penalty(reports: Iterable[WorkloadReport]) -> float | None:
     weighted_logs: list[float] = []
     total_weight = 0.0
     for report in reports:
-        if _is_environment_unavailable_optional(report):
+        policy = _acceptance_policy_for_report(report)
+        if policy.neutral_skip:
             continue
-        if report.baseline_effective_cost is None or report.baseline_effective_cost <= 0:
+        if not policy.baseline_comparable:
             continue
         weighted_logs.append(math.log(max(report.stability.penalty, 1e-9)) * report.weight)
         total_weight += report.weight
@@ -1507,6 +1657,18 @@ def load_baseline(path: str | Path) -> dict[str, Any] | None:
 
 
 def baseline_payload(report: Mapping[str, Any]) -> dict[str, Any]:
+    invalid_workloads = [
+        workload["id"]
+        for workload in report["workloads"]
+        if not _acceptance_policy_for_payload(workload).baseline_acceptable
+    ]
+    if invalid_workloads:
+        raise ValueError(
+            "Cannot save benchmark baseline with failed workloads or non-positive "
+            "effective cost: "
+            + ", ".join(sorted(invalid_workloads))
+        )
+
     workloads = {
         workload["id"]: {
             "effective_cost": workload["effective_cost"],
@@ -1517,6 +1679,7 @@ def baseline_payload(report: Mapping[str, Any]) -> dict[str, Any]:
             "spec_fingerprint": workload["spec_fingerprint"],
         }
         for workload in report["workloads"]
+        if _acceptance_policy_for_payload(workload).baseline_writable
     }
     return {
         "schema_version": BASELINE_SCHEMA_VERSION,
@@ -1567,14 +1730,20 @@ def _evaluate_suite_core(
 
     reports: list[WorkloadReport] = []
     workload_metadata: list[tuple[WorkloadReport, WorkloadSpec]] = []
+    selected_repetitions = repetitions if repetitions is not None else suite.defaults.repetitions
+    selected_warmups = warmups if warmups is not None else suite.defaults.warmups
+    _validate_execution_inputs(
+        repetitions=selected_repetitions,
+        warmups=selected_warmups,
+    )
     for entry in suite.workloads:
         spec = load_workload_spec(entry.spec_ref or entry.id)
         report = evaluate_workload(
             spec,
             weight=entry.weight,
             required=entry.required,
-            repetitions=repetitions or suite.defaults.repetitions,
-            warmups=warmups if warmups is not None else suite.defaults.warmups,
+            repetitions=selected_repetitions,
+            warmups=selected_warmups,
             baseline_entry=baseline_workloads.get(spec.id),
             artifacts_dir=artifacts_dir,
             timeout_ms=suite.defaults.timeout_ms,
@@ -1585,12 +1754,18 @@ def _evaluate_suite_core(
     correctness_passed = all(
         report.passed for report in reports if report.required
     )
-    generalization_penalty = 1.0
-    srps = _suite_score(
-        reports,
-        correctness_passed=correctness_passed,
-        generalization_penalty=generalization_penalty,
+    baseline_comparable = all(
+        _acceptance_policy_for_report(report).baseline_comparable
+        for report in reports
     )
+    generalization_penalty = 1.0
+    srps = None
+    if baseline_comparable or not correctness_passed:
+        srps = _suite_score(
+            reports,
+            correctness_passed=correctness_passed,
+            generalization_penalty=generalization_penalty,
+        )
 
     payload = {
         "version": BENCHMARK_REPORT_VERSION,
@@ -1606,7 +1781,10 @@ def _evaluate_suite_core(
         "summary": {
             "correctness_passed": correctness_passed,
             "generalization_penalty": generalization_penalty,
-            "stability_penalty": _suite_stability_penalty(reports),
+            "baseline_comparable": baseline_comparable,
+            "stability_penalty": (
+                _suite_stability_penalty(reports) if baseline_comparable else None
+            ),
             "seed": seed if seed is not None else suite.defaults.seed,
         },
         "workloads": [
@@ -1695,6 +1873,7 @@ def evaluate_suite(
             "suite": holdout_report["suite"],
             "passed": holdout_report["passed"],
             "srps": holdout_report["srps"],
+            "baseline_comparable": holdout_report["summary"]["baseline_comparable"],
         }
 
     _validate_schema(main_report, "report.schema.json", label="benchmark report")

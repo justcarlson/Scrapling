@@ -20,6 +20,7 @@ def _fake_report(passed=True, srps=123.45):
         "summary": {
             "correctness_passed": passed,
             "generalization_penalty": 1.0,
+            "baseline_comparable": srps is not None,
             "holdout": None,
             "seed": None,
         },
@@ -113,6 +114,31 @@ def test_main_saves_baseline(monkeypatch, tmp_path, capsys):
     assert f"Baseline saved to {baseline_path}" in output
 
 
+def test_main_does_not_save_baseline_when_strict_run_fails(monkeypatch, tmp_path, capsys):
+    baseline_path = tmp_path / "baseline.json"
+    saved = {"called": False}
+
+    def fake_save_baseline(path, report):
+        saved["called"] = True
+        return path
+
+    monkeypatch.setattr(
+        perf_benchmark,
+        "evaluate_suite",
+        lambda **_: _fake_report(passed=True, srps=None),
+    )
+    monkeypatch.setattr(perf_benchmark, "save_baseline", fake_save_baseline)
+
+    exit_code = perf_benchmark.main(
+        ["--baseline", str(baseline_path), "--save-baseline", "--strict"]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert saved["called"] is False
+    assert f"Baseline saved to {baseline_path}" not in output
+
+
 def test_main_strict_mode_fails_on_regression(monkeypatch):
     monkeypatch.setattr(
         perf_benchmark,
@@ -131,6 +157,69 @@ def test_main_strict_mode_fails_when_report_is_not_comparable(monkeypatch):
         "evaluate_suite",
         lambda **_: _fake_report(passed=True, srps=None),
     )
+
+    exit_code = perf_benchmark.main(["--strict"])
+
+    assert exit_code == 1
+
+
+def test_main_strict_mode_allows_optional_environment_unavailable_workloads(monkeypatch):
+    report = _fake_report()
+    report["workloads"].append(
+        {
+            "id": "browser_dynamic_extract",
+            "required": False,
+            "weight": 0.2,
+            "passed": False,
+            "failure_kind": "environment_unavailable",
+            "score": None,
+            "effective_cost": 0.0,
+            "baseline_effective_cost": None,
+            "metrics": {
+                "wall_ms": 0.0,
+                "cpu_ms": 0.0,
+                "peak_rss_mb": 0.0,
+                "load_ms": 0.0,
+                "extract_ms": 0.0,
+                "work_units": 0,
+            },
+            "correctness": {
+                "passed": False,
+                "item_count": 0,
+                "expected_item_count": 1,
+                "required_fields_match": False,
+                "semantic_match": 0.0,
+                "non_empty": False,
+                "messages": ["browser benchmark dependencies are unavailable"],
+            },
+            "stability": {
+                "mean_ms": 0.0,
+                "median_ms": 0.0,
+                "p95_ms": 0.0,
+                "cv": 0.0,
+                "success_rate": 0.0,
+                "consistent_output": False,
+                "penalty": 0.0,
+            },
+            "artifacts": {},
+        }
+    )
+    monkeypatch.setattr(perf_benchmark, "evaluate_suite", lambda **_: report)
+
+    exit_code = perf_benchmark.main(["--strict"])
+
+    assert exit_code == 0
+
+
+def test_main_strict_mode_fails_when_holdout_is_not_comparable(monkeypatch):
+    report = _fake_report()
+    report["summary"]["holdout"] = {
+        "suite": "holdout",
+        "passed": True,
+        "srps": 95.0,
+        "baseline_comparable": False,
+    }
+    monkeypatch.setattr(perf_benchmark, "evaluate_suite", lambda **_: report)
 
     exit_code = perf_benchmark.main(["--strict"])
 
@@ -158,6 +247,11 @@ def test_main_passes_workload_filter(monkeypatch):
 
     assert exit_code == 0
     assert captured["workload_filter"] == ["static_extract", "text_similarity"]
+
+
+def test_main_rejects_zero_repetitions():
+    with pytest.raises(ValueError, match="repetitions must be greater than zero"):
+        perf_benchmark.main(["--repetitions", "0"])
 
 
 def test_main_passes_holdout_arguments(monkeypatch):

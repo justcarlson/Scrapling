@@ -25,6 +25,8 @@ This design prevents an optimizer from getting credit for faster runs that retur
 
 Suite and workload specs are schema-validated when they are loaded. Invalid benchmark definitions fail early as evaluator configuration errors.
 
+Benchmark assets are shipped with the package build. The evaluator can resolve suites, workloads, schemas, fixtures, and expected outputs from an installed wheel, not only from a source checkout.
+
 ## Initial Dev Suite
 
 The first deterministic suites contain:
@@ -119,6 +121,10 @@ Workload crashes and timeouts are reported as failed workloads in the JSON repor
 
 `--strict` is acceptance-oriented. It exits non-zero when required correctness fails, when `srps` cannot be computed, or when any scored workload is missing a comparable baseline entry.
 
+If `--save-baseline` is combined with `--strict`, the baseline is only written when the run satisfies strict acceptance.
+
+If a baseline only covers part of the requested workload set, the evaluator marks the run as not baseline-comparable and leaves `srps` empty instead of emitting a subset-derived score.
+
 ## Files
 
 Benchmark assets live under:
@@ -133,6 +139,8 @@ benchmarks/
   baselines/
 ```
 
+Built-in benchmark assets are also shipped inside the `scrapling` package under `scrapling._benchmark_assets`. The evaluator uses those packaged assets for built-in suite names, so installed wheels do not depend on a source checkout layout.
+
 The current implementation uses:
 
 - suite specs in `benchmarks/suites/`
@@ -146,6 +154,8 @@ Saved baselines include workload version and a workload fingerprint. If a worklo
 
 Baselines are also schema-validated and suite-validated when loaded. A baseline for the wrong suite or suite version is treated as evaluator misconfiguration and rejected early.
 
+Optional workloads marked `environment_unavailable` are omitted from saved baselines instead of poisoning comparability for environments that do not have those optional dependencies.
+
 ## Interpreting Results
 
 Use the single score for acceptance decisions.
@@ -158,9 +168,10 @@ Use the workload breakdown to diagnose why the score changed:
 - `extract_ms`: extraction stage
 - `correctness`: output fidelity
 - `stability`: run-to-run timing and output consistency
+- `baseline_comparable`: whether all scored workloads in that report had comparable baseline entries
 - `metrics_trace`: per-repetition timing, correctness, and normalized-output hashes for audit
 - `failure_kind`: `null`, `correctness`, `timeout`, `worker_error`, `worker_exit`, `worker_protocol_error`, or `environment_unavailable`
 
 If `passed` is false, the score is intentionally zero. That is not a benchmark failure. It is the evaluator refusing to reward a functional regression.
 
-Optional workloads marked `environment_unavailable` are treated neutrally in suite scoring. Required workloads marked that way still fail the suite.
+Optional workloads marked `environment_unavailable` are treated neutrally in suite scoring and strict-mode comparability. Required workloads marked that way still fail the suite.

@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "cart_count": "3",
+      "csrf": "session-csrf-001",
+      "login_user": "casey@example.com",
+      "session_status": "active"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "items": [
+    {"price": "$41.00", "title": "Skillet Carbon", "url": "/products/skillet-carbon"},
+    {"price": "$58.25", "title": "Knife Chef", "url": "/products/knife-chef"},
+    {"price": "$27.40", "title": "Board Maple", "url": "/products/board-maple"},
+    {"price": "$36.90", "title": "Pan Stone", "url": "/products/pan-stone"}
+  ]
+}

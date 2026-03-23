@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+  <body>
+    <main id="session-start">Session bootstrap</main>
+    <script>
+      localStorage.setItem('bench_user', 'pat@example.com');
+      localStorage.setItem('cart_count', '4');
+      document.cookie = 'session_status=active; path=/';
+      setTimeout(() => {
+        window.location.href = '/benchmarks/fixtures/browser/session_dashboard.html';
+      }, 50);
+    </script>
+  </body>
+</html>

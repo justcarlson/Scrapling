@@ -41,6 +41,106 @@ def test_benchmark_assets_are_discoverable():
     assert "browser_session_extract" in list_workload_names()
 
 
+def test_packaged_assets_work_when_repo_benchmarks_are_unavailable(monkeypatch, tmp_path):
+    empty_root = tmp_path / "empty-root"
+    empty_root.mkdir()
+
+    monkeypatch.setattr(benchmarking, "REPO_ROOT", empty_root)
+    monkeypatch.setattr(benchmarking, "BENCHMARKS_ROOT", empty_root / "benchmarks")
+    monkeypatch.setattr(benchmarking, "SCHEMA_ROOT", empty_root / "benchmarks" / "schema")
+    monkeypatch.setattr(benchmarking, "SUITES_ROOT", empty_root / "benchmarks" / "suites")
+    monkeypatch.setattr(benchmarking, "WORKLOADS_ROOT", empty_root / "benchmarks" / "workloads")
+    benchmarking._schema_payload.cache_clear()
+    if hasattr(benchmarking, "_packaged_benchmarks_root"):
+        benchmarking._packaged_benchmarks_root.cache_clear()
+
+    suite_names = list_suite_names()
+    workload_names = list_workload_names()
+    suite = load_suite_spec("dev")
+    workload = load_workload_spec("static_extract")
+    report = evaluate_suite("dev", repetitions=1, warmups=0)
+
+    assert "dev" in suite_names
+    assert "static_extract" in workload_names
+    assert suite.name == "dev"
+    assert workload.id == "static_extract"
+    assert Path(workload.fixture).exists()
+    assert Path(workload.expected).exists()
+    assert report["passed"] is True
+
+
+def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
+    dist_dir = tmp_path / "dist"
+    install_dir = tmp_path / "install"
+    work_dir = tmp_path / "work"
+    dist_dir.mkdir()
+    install_dir.mkdir()
+    work_dir.mkdir()
+
+    repo_root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [sys.executable, "-m", "pip", "wheel", ".", "-w", str(dist_dir)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    wheel_path = next(dist_dir.glob("scrapling-*.whl"))
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--target",
+            str(install_dir),
+            str(wheel_path),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    installed_benchmarks = install_dir / "benchmarks"
+    if installed_benchmarks.exists():
+        subprocess.run(
+            [sys.executable, "-c", "import shutil, sys; shutil.rmtree(sys.argv[1])", str(installed_benchmarks)],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    script = textwrap.dedent(
+        """
+        import json
+        import scrapling.benchmarking as b
+
+        report = b.evaluate_suite("dev", repetitions=1, warmups=0)
+        print(json.dumps({
+            "module_file": b.__file__,
+            "suite_names": b.list_suite_names(),
+            "passed": report["passed"],
+        }))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=work_dir,
+        env={**os.environ, "PYTHONPATH": str(install_dir)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip())
+    assert payload["module_file"].startswith(str(install_dir))
+    assert "dev" in payload["suite_names"]
+    assert payload["passed"] is True
+
+
 def test_load_suite_and_workload_specs():
     suite = load_suite_spec("dev")
     workload = load_workload_spec("static_extract")
@@ -317,6 +417,89 @@ def test_release_suite_treats_browser_workloads_as_optional(monkeypatch):
     assert all(workload["passed"] is False for workload in failed_browser_reports)
 
 
+def test_acceptance_primitives_align_report_and_payload_forms():
+    report = benchmarking.WorkloadReport(
+        id="browser_dynamic_extract",
+        required=False,
+        weight=0.2,
+        passed=False,
+        failure_kind="environment_unavailable",
+        score=None,
+        effective_cost=0.0,
+        baseline_effective_cost=None,
+        metrics=benchmarking.WorkloadMetrics(0.0, 0.0, 0.0, 0.0, 0.0, 0),
+        correctness=benchmarking.CorrectnessSummary(
+            passed=False,
+            item_count=0,
+            expected_item_count=1,
+            required_fields_match=False,
+            semantic_match=0.0,
+            non_empty=False,
+            messages=("browser benchmark dependencies are unavailable",),
+        ),
+        stability=benchmarking.StabilitySummary(
+            mean_ms=0.0,
+            median_ms=0.0,
+            p95_ms=0.0,
+            cv=0.0,
+            success_rate=0.0,
+            consistent_output=False,
+            penalty=0.0,
+        ),
+        artifacts={},
+    )
+    payload = {
+        "required": False,
+        "failure_kind": "environment_unavailable",
+        "baseline_effective_cost": None,
+        "passed": False,
+        "effective_cost": 0.0,
+    }
+
+    assert benchmarking._is_environment_unavailable_optional(report) is True
+    assert benchmarking._is_neutral_workload_payload(payload) is True
+    assert benchmarking._is_baseline_comparable_workload(report) is True
+    assert benchmarking._is_baseline_comparable_workload_payload(payload) is True
+
+
+def test_report_is_strict_success_matches_shared_acceptance_contract():
+    report = {
+        "passed": True,
+        "srps": 100.0,
+        "summary": {
+            "baseline_comparable": True,
+            "holdout": {
+                "suite": "holdout",
+                "passed": True,
+                "srps": 95.0,
+                "baseline_comparable": True,
+            },
+        },
+        "workloads": [
+            {
+                "id": "static_extract",
+                "required": True,
+                "failure_kind": None,
+                "baseline_effective_cost": 10.0,
+                "passed": True,
+                "effective_cost": 9.0,
+            },
+            {
+                "id": "browser_dynamic_extract",
+                "required": False,
+                "failure_kind": "environment_unavailable",
+                "baseline_effective_cost": None,
+                "passed": False,
+                "effective_cost": 0.0,
+            },
+        ],
+    }
+
+    assert benchmarking._report_is_strict_success(report) is True
+    report["summary"]["holdout"]["baseline_comparable"] = False
+    assert benchmarking._report_is_strict_success(report) is False
+
+
 def test_suite_score_penalizes_failed_optional_workloads():
     passing_required = benchmarking.WorkloadReport(
         id="required_ok",
@@ -478,6 +661,41 @@ def test_suite_score_treats_environment_unavailable_optional_workloads_neutrally
 
     assert all_passing_score == 100.0
     assert skipped_optional_score == all_passing_score
+
+
+def test_acceptance_policy_treats_optional_environment_unavailable_as_neutral():
+    policy = benchmarking._acceptance_policy_for_payload(
+        {
+            "required": False,
+            "failure_kind": "environment_unavailable",
+            "passed": False,
+            "effective_cost": 0.0,
+            "baseline_effective_cost": None,
+        }
+    )
+
+    assert policy.neutral_skip is True
+    assert policy.baseline_comparable is True
+    assert policy.baseline_writable is False
+    assert policy.baseline_acceptable is True
+
+
+def test_acceptance_policy_treats_failed_required_workload_as_not_acceptable():
+    report = benchmarking._failed_workload_report(
+        "required_failed",
+        weight=1.0,
+        required=True,
+        failure_kind="worker_error",
+        messages=("failed",),
+        baseline_entry={"effective_cost": 10.0},
+    )
+
+    policy = benchmarking._acceptance_policy_for_report(report)
+
+    assert policy.neutral_skip is False
+    assert policy.baseline_comparable is True
+    assert policy.baseline_writable is False
+    assert policy.baseline_acceptable is False
 
 
 def test_required_environment_unavailable_workload_still_fails_suite(monkeypatch):
@@ -652,6 +870,55 @@ def test_baseline_round_trip_adds_scores(tmp_path):
     assert all(workload["score"] is not None for workload in rerun["workloads"])
 
 
+def test_filtered_baseline_scores_same_filtered_workload_set(tmp_path):
+    baseline_path = tmp_path / "dev-filtered-baseline.json"
+    filtered = evaluate_suite(
+        "dev",
+        repetitions=1,
+        warmups=0,
+        workload_filter=["static_extract"],
+    )
+
+    save_baseline(baseline_path, filtered)
+    rerun = evaluate_suite(
+        "dev",
+        baseline_path=baseline_path,
+        repetitions=1,
+        warmups=0,
+        workload_filter=["static_extract"],
+    )
+
+    assert rerun["summary"]["baseline_comparable"] is True
+    assert rerun["srps"] is not None
+    assert [workload["id"] for workload in rerun["workloads"]] == ["static_extract"]
+
+
+def test_filtered_baseline_does_not_score_full_suite(tmp_path):
+    baseline_path = tmp_path / "dev-filtered-baseline.json"
+    filtered = evaluate_suite(
+        "dev",
+        repetitions=1,
+        warmups=0,
+        workload_filter=["static_extract"],
+    )
+
+    save_baseline(baseline_path, filtered)
+    rerun = evaluate_suite(
+        "dev",
+        baseline_path=baseline_path,
+        repetitions=1,
+        warmups=0,
+    )
+
+    assert rerun["summary"]["baseline_comparable"] is False
+    assert rerun["srps"] is None
+    assert {
+        workload["id"]
+        for workload in rerun["workloads"]
+        if workload["baseline_effective_cost"] is None
+    } == {"large_dom_extract", "text_similarity"}
+
+
 def test_holdout_suite_contributes_generalization_summary(tmp_path):
     dev_baseline = tmp_path / "dev-baseline.json"
     holdout_baseline = tmp_path / "holdout-baseline.json"
@@ -695,6 +962,7 @@ def test_evaluate_suite_revalidates_final_report_after_holdout_adjustments(monke
                 "summary": {
                     "correctness_passed": True,
                     "generalization_penalty": 1.0,
+                    "baseline_comparable": True,
                     "stability_penalty": 1.0,
                     "seed": None,
                 },
@@ -711,6 +979,7 @@ def test_evaluate_suite_revalidates_final_report_after_holdout_adjustments(monke
                 "summary": {
                     "correctness_passed": True,
                     "generalization_penalty": 1.0,
+                    "baseline_comparable": True,
                     "stability_penalty": 1.0,
                     "seed": None,
                 },
@@ -750,6 +1019,72 @@ def test_baseline_payload_shape():
     assert payload["suite_version"] == 1
     assert payload["workloads"]["static_extract"]["workload_version"] == 1
     assert payload["workloads"]["static_extract"]["spec_fingerprint"]
+
+
+def test_save_baseline_rejects_failed_workloads(tmp_path):
+    baseline_path = tmp_path / "invalid-baseline.json"
+    report = evaluate_suite("dev", repetitions=1, warmups=0)
+    report["workloads"][0]["passed"] = False
+    report["workloads"][0]["failure_kind"] = "correctness"
+    report["workloads"][0]["effective_cost"] = 0.0
+    report["workloads"][0]["score"] = 0.0
+    report["passed"] = False
+    report["srps"] = 0.0
+
+    with pytest.raises(ValueError, match="failed workloads"):
+        save_baseline(baseline_path, report)
+
+
+def test_save_baseline_omits_optional_environment_unavailable_workloads(tmp_path):
+    baseline_path = tmp_path / "release-baseline.json"
+    report = evaluate_suite("release", repetitions=1, warmups=0)
+    report["workloads"].append(
+        {
+            "id": "browser_optional_missing",
+            "required": False,
+            "weight": 0.1,
+            "passed": False,
+            "failure_kind": "environment_unavailable",
+            "score": None,
+            "effective_cost": 0.0,
+            "baseline_effective_cost": None,
+            "metrics": {
+                "wall_ms": 0.0,
+                "cpu_ms": 0.0,
+                "peak_rss_mb": 0.0,
+                "load_ms": 0.0,
+                "extract_ms": 0.0,
+                "work_units": 0,
+            },
+            "correctness": {
+                "passed": False,
+                "item_count": 0,
+                "expected_item_count": 1,
+                "required_fields_match": False,
+                "semantic_match": 0.0,
+                "non_empty": False,
+                "messages": ["browser benchmark dependencies are unavailable"],
+            },
+            "stability": {
+                "mean_ms": 0.0,
+                "median_ms": 0.0,
+                "p95_ms": 0.0,
+                "cv": 0.0,
+                "success_rate": 0.0,
+                "consistent_output": False,
+                "penalty": 0.0,
+            },
+            "artifacts": {},
+            "workload_version": 1,
+            "spec_fingerprint": "fingerprint",
+        }
+    )
+
+    save_baseline(baseline_path, report)
+    payload = load_baseline(baseline_path)
+
+    assert payload is not None
+    assert "browser_optional_missing" not in payload["workloads"]
 
 
 def test_load_baseline_rejects_unknown_schema(tmp_path):
@@ -794,6 +1129,7 @@ def test_report_schema_rejects_invalid_nested_shapes():
                 "summary": {
                     "correctness_passed": True,
                     "generalization_penalty": 1.0,
+                    "baseline_comparable": False,
                     "stability_penalty": None,
                     "seed": None,
                 },
@@ -861,6 +1197,34 @@ def test_evaluate_suite_rejects_mismatched_baseline_suite(tmp_path):
 
     with pytest.raises(ValueError, match="does not match requested suite"):
         evaluate_suite("dev", baseline_path=baseline_path, repetitions=1, warmups=0)
+
+
+def test_evaluate_suite_rejects_zero_repetitions():
+    with pytest.raises(ValueError, match="repetitions must be greater than zero"):
+        evaluate_suite("dev", repetitions=0, warmups=0)
+
+
+def test_evaluate_suite_rejects_negative_warmups():
+    with pytest.raises(ValueError, match="warmups cannot be negative"):
+        evaluate_suite("dev", repetitions=1, warmups=-1)
+
+
+def test_evaluate_suite_marks_partial_holdout_baseline_as_not_comparable(tmp_path):
+    baseline_path = tmp_path / "holdout-baseline.json"
+    save_baseline(baseline_path, evaluate_suite("holdout", repetitions=1, warmups=0))
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    payload["workloads"].pop(next(iter(payload["workloads"])))
+    baseline_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = evaluate_suite(
+        "dev",
+        repetitions=1,
+        warmups=0,
+        holdout_suite_name_or_path="holdout",
+        holdout_baseline_path=baseline_path,
+    )
+
+    assert report["summary"]["holdout"]["baseline_comparable"] is False
 
 
 def test_required_correctness_failure_zeroes_srps(tmp_path):

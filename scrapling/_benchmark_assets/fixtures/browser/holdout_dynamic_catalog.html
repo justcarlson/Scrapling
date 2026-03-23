@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <body>
+    <main id="dynamic-root">
+      <div id="status">Loading alternate dynamic catalog</div>
+    </main>
+    <script>
+      setTimeout(() => {
+        document.getElementById('status').textContent = 'Alternate dynamic catalog ready';
+        const root = document.getElementById('dynamic-root');
+        const items = [
+          ['Nimbus Shelf', '$91.00', '/dynamic-holdout/item-1'],
+          ['Orbit Lamp', '$97.50', '/dynamic-holdout/item-2']
+        ];
+        for (const [title, price, url] of items) {
+          const article = document.createElement('article');
+          article.className = 'product-card';
+          article.innerHTML = `<a href="${url}"><h3 class="title">${title}</h3><span class="price">${price}</span></a>`;
+          root.appendChild(article);
+        }
+      }, 50);
+    </script>
+  </body>
+</html>
