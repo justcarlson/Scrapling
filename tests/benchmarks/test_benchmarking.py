@@ -69,6 +69,104 @@ def test_packaged_assets_work_when_repo_benchmarks_are_unavailable(monkeypatch, 
     assert report["passed"] is True
 
 
+def test_repo_checkout_assets_win_over_packaged_assets(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_benchmarks = repo_root / "benchmarks"
+    packaged_root = tmp_path / "packaged"
+    repo_root.mkdir()
+    (repo_root / "pyproject.toml").write_text("[project]\nname = 'fixture'\nversion = '0.0.0'\n", encoding="utf-8")
+
+    for root in (repo_benchmarks, packaged_root):
+        (root / "suites").mkdir(parents=True)
+        (root / "workloads").mkdir(parents=True)
+
+    (repo_benchmarks / "fixtures").mkdir()
+    (repo_benchmarks / "expected").mkdir()
+    (packaged_root / "fixtures").mkdir()
+    (packaged_root / "expected").mkdir()
+
+    (repo_benchmarks / "fixtures" / "repo.html").write_text("<html></html>", encoding="utf-8")
+    (repo_benchmarks / "expected" / "repo.json").write_text('{"items": []}', encoding="utf-8")
+    (packaged_root / "fixtures" / "packaged.html").write_text("<html></html>", encoding="utf-8")
+    (packaged_root / "expected" / "packaged.json").write_text('{"items": []}', encoding="utf-8")
+
+    (repo_benchmarks / "suites" / "dev.json").write_text(
+        json.dumps(
+            {
+                "name": "dev",
+                "version": 1,
+                "workloads": [{"id": "shared_workload", "weight": 1.0, "required": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (packaged_root / "suites" / "dev.json").write_text(
+        json.dumps(
+            {
+                "name": "dev",
+                "version": 1,
+                "workloads": [{"id": "shared_workload", "weight": 1.0, "required": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    (repo_benchmarks / "workloads" / "shared_workload.json").write_text(
+        json.dumps(
+            {
+                "id": "repo_workload",
+                "version": 1,
+                "kind": "static",
+                "fixture": "fixtures/repo.html",
+                "expected": "expected/repo.json",
+                "extract_spec": {"strategy": "record_css", "item_selector": ".item", "fields": {}},
+                "correctness": {"comparison": "exact", "required_fields": [], "semantic_match_threshold": 1.0},
+                "cost_weights": {
+                    "wall_ms": 0.35,
+                    "cpu_ms": 0.25,
+                    "peak_rss_mb": 0.15,
+                    "load_ms": 0.1,
+                    "extract_ms": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (packaged_root / "workloads" / "shared_workload.json").write_text(
+        json.dumps(
+            {
+                "id": "packaged_workload",
+                "version": 1,
+                "kind": "static",
+                "fixture": "fixtures/packaged.html",
+                "expected": "expected/packaged.json",
+                "extract_spec": {"strategy": "record_css", "item_selector": ".item", "fields": {}},
+                "correctness": {"comparison": "exact", "required_fields": [], "semantic_match_threshold": 1.0},
+                "cost_weights": {
+                    "wall_ms": 0.35,
+                    "cpu_ms": 0.25,
+                    "peak_rss_mb": 0.15,
+                    "load_ms": 0.1,
+                    "extract_ms": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(benchmarking, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(benchmarking, "BENCHMARKS_ROOT", repo_benchmarks)
+    monkeypatch.setattr(benchmarking, "SCHEMA_ROOT", repo_benchmarks / "schema")
+    monkeypatch.setattr(benchmarking, "SUITES_ROOT", repo_benchmarks / "suites")
+    monkeypatch.setattr(benchmarking, "WORKLOADS_ROOT", repo_benchmarks / "workloads")
+    monkeypatch.setattr(benchmarking, "_packaged_benchmarks_root", lambda: packaged_root)
+    monkeypatch.setattr(benchmarking, "_validate_schema", lambda *args, **kwargs: None)
+
+    suite = load_suite_spec("dev")
+
+    assert suite.workloads[0].id == "repo_workload"
+
+
 def test_installed_wheel_can_run_dev_suite_with_packaged_assets(tmp_path):
     dist_dir = tmp_path / "dist"
     install_dir = tmp_path / "install"
@@ -399,9 +497,7 @@ def test_release_suite_treats_browser_workloads_as_optional(monkeypatch):
             **kwargs,
         )
 
-    browser_entries = {
-        entry.id: entry.required for entry in release_suite.workloads if entry.id.startswith("browser_")
-    }
+    browser_entries = {entry.id: entry.required for entry in release_suite.workloads if entry.id.startswith("browser_")}
     monkeypatch.setattr(benchmarking, "evaluate_workload", fake_evaluate_workload)
 
     report = evaluate_suite("release", repetitions=1, warmups=0)
@@ -411,9 +507,7 @@ def test_release_suite_treats_browser_workloads_as_optional(monkeypatch):
         "browser_session_extract": False,
     }
     assert report["passed"] is True
-    failed_browser_reports = [
-        workload for workload in report["workloads"] if workload["id"].startswith("browser_")
-    ]
+    failed_browser_reports = [workload for workload in report["workloads"] if workload["id"].startswith("browser_")]
     assert all(workload["passed"] is False for workload in failed_browser_reports)
 
 
@@ -912,11 +1006,10 @@ def test_filtered_baseline_does_not_score_full_suite(tmp_path):
 
     assert rerun["summary"]["baseline_comparable"] is False
     assert rerun["srps"] is None
-    assert {
-        workload["id"]
-        for workload in rerun["workloads"]
-        if workload["baseline_effective_cost"] is None
-    } == {"large_dom_extract", "text_similarity"}
+    assert {workload["id"] for workload in rerun["workloads"] if workload["baseline_effective_cost"] is None} == {
+        "large_dom_extract",
+        "text_similarity",
+    }
 
 
 def test_holdout_suite_contributes_generalization_summary(tmp_path):
@@ -974,7 +1067,10 @@ def test_evaluate_suite_revalidates_final_report_after_holdout_adjustments(monke
                 "suite_version": 1,
                 "passed": True,
                 "srps": 50.0,
-                "baseline": {"path": "benchmarks/baselines/holdout.json", "version": benchmarking.BASELINE_SCHEMA_VERSION},
+                "baseline": {
+                    "path": "benchmarks/baselines/holdout.json",
+                    "version": benchmarking.BASELINE_SCHEMA_VERSION,
+                },
                 "environment": benchmarking.environment_metadata(),
                 "summary": {
                     "correctness_passed": True,
@@ -1337,9 +1433,7 @@ def test_workload_exception_is_reported_in_json_report(tmp_path):
     assert report["passed"] is False
     assert report["srps"] == 0.0
     assert report["workloads"][0]["failure_kind"] == "worker_error"
-    assert "Unsupported benchmark extraction strategy" in " ".join(
-        report["workloads"][0]["correctness"]["messages"]
-    )
+    assert "Unsupported benchmark extraction strategy" in " ".join(report["workloads"][0]["correctness"]["messages"])
 
 
 def test_evaluate_workload_reports_environment_unavailable(monkeypatch):
@@ -1837,7 +1931,5 @@ def test_baseline_fingerprint_mismatch_disables_scoring(tmp_path):
         warmups=0,
     )
 
-    static_report = next(
-        workload for workload in rerun["workloads"] if workload["id"] == "static_extract"
-    )
+    static_report = next(workload for workload in rerun["workloads"] if workload["id"] == "static_extract")
     assert static_report["score"] is None

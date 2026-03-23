@@ -11,7 +11,7 @@ Non-goals
 - Do not optimize only for synthetic parser microbenchmarks.
 
 Primary output
-- One scalar metric: `SRPS` (Scrapling Real-world Performance Score)
+- One scalar metric when baseline-comparable: `SRPS` (Scrapling Real-world Performance Score)
 - One boolean gate: `passed`
 - One structured JSON report with raw evidence
 
@@ -32,6 +32,7 @@ Interpretation
 - `>100` means performance improved relative to the baseline.
 - `<100` means performance regressed relative to the baseline.
 - `0` means the run is invalid for performance comparison because required functionality regressed.
+- `null` means the run was not baseline-comparable, so no score was emitted.
 
 Workload cost model
 - Each workload produces:
@@ -83,7 +84,7 @@ Evaluator contract
   - optional seed and repetition overrides
 - Output:
   - one JSON report
-  - one scalar `srps`
+  - one scalar `srps`, or `null` when the requested run is not baseline-comparable
   - one boolean `passed`
 - Exit semantics:
   - process exit code indicates evaluator execution success or failure

@@ -225,7 +225,18 @@ def _packaged_benchmarks_root() -> Path | None:
     return _RESOURCE_STACK.enter_context(resources.as_file(traversable))
 
 
+def _source_checkout_benchmarks_root() -> Path | None:
+    if not BENCHMARKS_ROOT.exists():
+        return None
+    if (REPO_ROOT / "pyproject.toml").exists():
+        return BENCHMARKS_ROOT
+    return None
+
+
 def _builtin_benchmarks_root() -> Path:
+    source_checkout_root = _source_checkout_benchmarks_root()
+    if source_checkout_root is not None:
+        return source_checkout_root
     packaged_root = _packaged_benchmarks_root()
     if packaged_root is not None and packaged_root.exists():
         return packaged_root
@@ -348,28 +359,18 @@ def _validate_suite_invariants(payload: Mapping[str, Any]) -> None:
 def _validate_cost_weights(cost_weights: Mapping[str, Any]) -> None:
     missing = [key for key in REQUIRED_COST_WEIGHT_KEYS if key not in cost_weights]
     if missing:
-        raise ValueError(
-            "Invalid benchmark workload spec: Missing required cost weight(s): "
-            + ", ".join(missing)
-        )
+        raise ValueError("Invalid benchmark workload spec: Missing required cost weight(s): " + ", ".join(missing))
 
     unknown = sorted(set(cost_weights) - set(REQUIRED_COST_WEIGHT_KEYS))
     if unknown:
-        raise ValueError(
-            "Invalid benchmark workload spec: Unsupported cost weight(s): "
-            + ", ".join(unknown)
-        )
+        raise ValueError("Invalid benchmark workload spec: Unsupported cost weight(s): " + ", ".join(unknown))
 
     for key in REQUIRED_COST_WEIGHT_KEYS:
         value = cost_weights[key]
         if not isinstance(value, (int, float)) or isinstance(value, bool):
-            raise ValueError(
-                f"Invalid benchmark workload spec: Cost weight '{key}' must be numeric"
-            )
+            raise ValueError(f"Invalid benchmark workload spec: Cost weight '{key}' must be numeric")
         if value < 0:
-            raise ValueError(
-                f"Invalid benchmark workload spec: Cost weight '{key}' must be non-negative"
-            )
+            raise ValueError(f"Invalid benchmark workload spec: Cost weight '{key}' must be non-negative")
 
 
 def _validate_workload_invariants(payload: Mapping[str, Any]) -> None:
@@ -458,10 +459,7 @@ def load_workload_spec(path_or_name: str | Path) -> WorkloadSpec:
         version=int(payload["version"]),
         kind=payload["kind"],
         fixture=str(_resolve_relative(payload["fixture"], spec_path)),
-        fixtures=tuple(
-            str(_resolve_relative(path_value, spec_path))
-            for path_value in payload.get("fixtures", [])
-        ),
+        fixtures=tuple(str(_resolve_relative(path_value, spec_path)) for path_value in payload.get("fixtures", [])),
         expected=str(_resolve_relative(payload["expected"], spec_path)),
         ready_condition=payload.get("ready_condition", {"type": "immediate"}),
         extract_spec=payload["extract_spec"],
@@ -832,13 +830,12 @@ def _semantic_item_score(expected_item: Mapping[str, Any], actual_item: Mapping[
     fields = sorted(set(expected_item) | set(actual_item))
     if not fields:
         return 0.0
-    return statistics.mean(
-        _semantic_field_score(expected_item.get(field), actual_item.get(field))
-        for field in fields
-    )
+    return statistics.mean(_semantic_field_score(expected_item.get(field), actual_item.get(field)) for field in fields)
 
 
-def _semantic_match_score(expected_items: Sequence[Mapping[str, Any]], actual_items: Sequence[Mapping[str, Any]]) -> float:
+def _semantic_match_score(
+    expected_items: Sequence[Mapping[str, Any]], actual_items: Sequence[Mapping[str, Any]]
+) -> float:
     if not expected_items and not actual_items:
         return 1.0
     if not expected_items or not actual_items:
@@ -951,8 +948,7 @@ def _evaluate_correctness(
     required_fields = tuple(workload.correctness.get("required_fields", []))
 
     required_fields_match = all(
-        all(item.get(field) not in (None, "") for field in required_fields)
-        for item in actual_items
+        all(item.get(field) not in (None, "") for field in required_fields) for item in actual_items
     )
     non_empty = bool(actual_items) or not expected_items
     item_count_match = len(actual_items) == len(expected_items)
@@ -1063,10 +1059,7 @@ def _evaluate_workload_in_process(
         raise ValueError("warmups cannot be negative")
 
     fixture_paths = workload.fixtures or (workload.fixture,)
-    fixture_texts = [
-        Path(path_value).read_text(encoding="utf-8")
-        for path_value in fixture_paths
-    ]
+    fixture_texts = [Path(path_value).read_text(encoding="utf-8") for path_value in fixture_paths]
     expected_output = _load_json(Path(workload.expected))
 
     _run_warmups_out_of_process(workload, warmups=warmups, timeout_ms=warmup_timeout_ms)
@@ -1132,9 +1125,7 @@ def _evaluate_workload_in_process(
         )
 
     all_runs_passed = all(run.passed for run in correctness_runs)
-    consistent_output = all(
-        output == normalized_outputs[0] for output in normalized_outputs[1:]
-    )
+    consistent_output = all(output == normalized_outputs[0] for output in normalized_outputs[1:])
     aggregate_messages: list[str] = []
     seen_messages: set[str] = set()
     for run in correctness_runs:
@@ -1144,9 +1135,7 @@ def _evaluate_workload_in_process(
                 seen_messages.add(message)
     failed_repetitions = sum(not run.passed for run in correctness_runs)
     if failed_repetitions:
-        aggregate_messages.append(
-            f"correctness failed in {failed_repetitions}/{repetitions} repetitions"
-        )
+        aggregate_messages.append(f"correctness failed in {failed_repetitions}/{repetitions} repetitions")
     if not consistent_output:
         aggregate_messages.append("output changed across repetitions")
 
@@ -1260,10 +1249,7 @@ def _warmup_worker(
     try:
         workload = WorkloadSpec(**workload_payload)
         fixture_paths = workload.fixtures or (workload.fixture,)
-        fixture_texts = [
-            Path(path_value).read_text(encoding="utf-8")
-            for path_value in fixture_paths
-        ]
+        fixture_texts = [Path(path_value).read_text(encoding="utf-8") for path_value in fixture_paths]
         for _ in range(warmups):
             _run_extraction(workload, fixture_texts, fixture_paths)
         queue.put({"ok": True})
@@ -1513,9 +1499,7 @@ def _acceptance_policy(
     baseline_effective_cost: float | None,
 ) -> AcceptancePolicy:
     neutral_skip = (not required) and failure_kind == "environment_unavailable"
-    baseline_comparable = neutral_skip or (
-        baseline_effective_cost is not None and baseline_effective_cost > 0
-    )
+    baseline_comparable = neutral_skip or (baseline_effective_cost is not None and baseline_effective_cost > 0)
     baseline_writable = bool(passed) and effective_cost > 0
     baseline_acceptable = neutral_skip or baseline_writable
     return AcceptancePolicy(
@@ -1543,9 +1527,7 @@ def _acceptance_policy_for_payload(workload: Mapping[str, Any]) -> AcceptancePol
         passed=bool(workload["passed"]),
         effective_cost=float(workload["effective_cost"]),
         baseline_effective_cost=(
-            None
-            if workload.get("baseline_effective_cost") is None
-            else float(workload["baseline_effective_cost"])
+            None if workload.get("baseline_effective_cost") is None else float(workload["baseline_effective_cost"])
         ),
     )
 
@@ -1567,10 +1549,7 @@ def _is_baseline_comparable_workload_payload(workload: Mapping[str, Any]) -> boo
 
 
 def _is_report_baseline_comparable_payload(report: Mapping[str, Any]) -> bool:
-    return all(
-        _acceptance_policy_for_payload(workload).baseline_comparable
-        for workload in report["workloads"]
-    )
+    return all(_acceptance_policy_for_payload(workload).baseline_comparable for workload in report["workloads"])
 
 
 def _report_is_strict_success(report: Mapping[str, Any]) -> bool:
@@ -1581,9 +1560,7 @@ def _report_is_strict_success(report: Mapping[str, Any]) -> bool:
     if not bool(report["summary"]["baseline_comparable"]):
         return False
     holdout = report["summary"].get("holdout")
-    if holdout is not None and (
-        holdout.get("srps") is None or not bool(holdout.get("baseline_comparable"))
-    ):
+    if holdout is not None and (holdout.get("srps") is None or not bool(holdout.get("baseline_comparable"))):
         return False
     return _is_report_baseline_comparable_payload(report)
 
@@ -1619,10 +1596,7 @@ def _suite_score(
         return None
     stability_penalty = math.exp(sum(weighted_stability_logs) / total_weight)
     return round(
-        100
-        * generalization_penalty
-        * stability_penalty
-        * math.exp(sum(weighted_logs) / total_weight),
+        100 * generalization_penalty * stability_penalty * math.exp(sum(weighted_logs) / total_weight),
         2,
     )
 
@@ -1649,9 +1623,7 @@ def load_baseline(path: str | Path) -> dict[str, Any] | None:
         return None
     payload = _load_json(baseline_path)
     if int(payload.get("schema_version", -1)) != BASELINE_SCHEMA_VERSION:
-        raise ValueError(
-            f"Unsupported baseline schema version: {payload.get('schema_version')}"
-        )
+        raise ValueError(f"Unsupported baseline schema version: {payload.get('schema_version')}")
     _validate_schema(payload, "baseline.schema.json", label="benchmark baseline")
     return payload
 
@@ -1665,8 +1637,7 @@ def baseline_payload(report: Mapping[str, Any]) -> dict[str, Any]:
     if invalid_workloads:
         raise ValueError(
             "Cannot save benchmark baseline with failed workloads or non-positive "
-            "effective cost: "
-            + ", ".join(sorted(invalid_workloads))
+            "effective cost: " + ", ".join(sorted(invalid_workloads))
         )
 
     workloads = {
@@ -1718,9 +1689,7 @@ def _evaluate_suite_core(
     baseline = load_baseline(baseline_path) if baseline_path else None
     if baseline is not None:
         if baseline.get("suite") != suite.name:
-            raise ValueError(
-                f"Baseline suite '{baseline.get('suite')}' does not match requested suite '{suite.name}'"
-            )
+            raise ValueError(f"Baseline suite '{baseline.get('suite')}' does not match requested suite '{suite.name}'")
         if int(baseline.get("suite_version", suite.version)) != suite.version:
             raise ValueError(
                 "Baseline suite version "
@@ -1751,13 +1720,8 @@ def _evaluate_suite_core(
         reports.append(report)
         workload_metadata.append((report, spec))
 
-    correctness_passed = all(
-        report.passed for report in reports if report.required
-    )
-    baseline_comparable = all(
-        _acceptance_policy_for_report(report).baseline_comparable
-        for report in reports
-    )
+    correctness_passed = all(report.passed for report in reports if report.required)
+    baseline_comparable = all(_acceptance_policy_for_report(report).baseline_comparable for report in reports)
     generalization_penalty = 1.0
     srps = None
     if baseline_comparable or not correctness_passed:
@@ -1782,9 +1746,7 @@ def _evaluate_suite_core(
             "correctness_passed": correctness_passed,
             "generalization_penalty": generalization_penalty,
             "baseline_comparable": baseline_comparable,
-            "stability_penalty": (
-                _suite_stability_penalty(reports) if baseline_comparable else None
-            ),
+            "stability_penalty": (_suite_stability_penalty(reports) if baseline_comparable else None),
             "seed": seed if seed is not None else suite.defaults.seed,
         },
         "workloads": [
@@ -1837,9 +1799,7 @@ def evaluate_suite(
     overall_passed = bool(main_report["passed"])
 
     if holdout_suite_name_or_path is not None:
-        holdout_artifacts_dir = (
-            str(Path(artifacts_dir) / "holdout") if artifacts_dir is not None else None
-        )
+        holdout_artifacts_dir = str(Path(artifacts_dir) / "holdout") if artifacts_dir is not None else None
         holdout_report = _evaluate_suite_core(
             suite_name_or_path=holdout_suite_name_or_path,
             baseline_path=holdout_baseline_path,

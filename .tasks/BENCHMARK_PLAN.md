@@ -157,7 +157,7 @@ Execution order
 
 Acceptance criteria for the first milestone
 - A single command can run the dev suite and emit one JSON report.
-- The report includes `srps`, `passed`, workload metrics, correctness, and artifacts.
+- The report includes `srps` (or `null` when not baseline-comparable), `passed`, workload metrics, correctness, and artifacts.
 - Required correctness failures force `srps = 0`.
 - Baselines can be saved and loaded with version checks.
 - The first three workloads are deterministic and covered by automated tests.

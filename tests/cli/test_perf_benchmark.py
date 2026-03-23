@@ -103,9 +103,7 @@ def test_main_saves_baseline(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(perf_benchmark, "evaluate_suite", lambda **_: _fake_report())
     monkeypatch.setattr(perf_benchmark, "save_baseline", fake_save_baseline)
 
-    exit_code = perf_benchmark.main(
-        ["--baseline", str(baseline_path), "--save-baseline"]
-    )
+    exit_code = perf_benchmark.main(["--baseline", str(baseline_path), "--save-baseline"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -129,14 +127,36 @@ def test_main_does_not_save_baseline_when_strict_run_fails(monkeypatch, tmp_path
     )
     monkeypatch.setattr(perf_benchmark, "save_baseline", fake_save_baseline)
 
-    exit_code = perf_benchmark.main(
-        ["--baseline", str(baseline_path), "--save-baseline", "--strict"]
-    )
+    exit_code = perf_benchmark.main(["--baseline", str(baseline_path), "--save-baseline", "--strict"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
     assert saved["called"] is False
     assert f"Baseline saved to {baseline_path}" not in output
+
+
+def test_main_non_strict_save_baseline_reports_rejection_without_crashing(monkeypatch, tmp_path, capsys):
+    baseline_path = tmp_path / "baseline.json"
+
+    def fake_save_baseline(path, report):
+        raise ValueError(
+            "Cannot save benchmark baseline with failed workloads or non-positive effective cost: static_extract"
+        )
+
+    monkeypatch.setattr(
+        perf_benchmark,
+        "evaluate_suite",
+        lambda **_: _fake_report(passed=False, srps=0.0),
+    )
+    monkeypatch.setattr(perf_benchmark, "save_baseline", fake_save_baseline)
+
+    exit_code = perf_benchmark.main(["--baseline", str(baseline_path), "--save-baseline"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Passed: False" in captured.out
+    assert f"Baseline saved to {baseline_path}" not in captured.out
+    assert "Cannot save benchmark baseline with failed workloads" in captured.err
 
 
 def test_main_strict_mode_fails_on_regression(monkeypatch):
@@ -241,9 +261,7 @@ def test_main_passes_workload_filter(monkeypatch):
 
     monkeypatch.setattr(perf_benchmark, "evaluate_suite", fake_evaluate_suite)
 
-    exit_code = perf_benchmark.main(
-        ["--workload", "static_extract", "--workload", "text_similarity"]
-    )
+    exit_code = perf_benchmark.main(["--workload", "static_extract", "--workload", "text_similarity"])
 
     assert exit_code == 0
     assert captured["workload_filter"] == ["static_extract", "text_similarity"]

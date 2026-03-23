@@ -26,9 +26,7 @@ DEFAULT_ARTIFACTS_DIR = Path(".benchmarks/artifacts")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run Scrapling's benchmark evaluator."
-    )
+    parser = argparse.ArgumentParser(description="Run Scrapling's benchmark evaluator.")
     parser.add_argument(
         "--suite",
         default="dev",
@@ -92,8 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help=(
-            "Return a non-zero exit code when required correctness gates fail "
-            "or the run is not baseline-comparable."
+            "Return a non-zero exit code when required correctness gates fail or the run is not baseline-comparable."
         ),
     )
     parser.add_argument(
@@ -139,6 +136,7 @@ def _print_human_report(report: dict[str, object]) -> None:
             f"{score:>10}"
         )
 
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -156,9 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline_path = args.baseline or f"benchmarks/baselines/{Path(args.suite).stem}.json"
     holdout_baseline_path = None
     if args.holdout_suite:
-        holdout_baseline_path = args.holdout_baseline or (
-            f"benchmarks/baselines/{Path(args.holdout_suite).stem}.json"
-        )
+        holdout_baseline_path = args.holdout_baseline or (f"benchmarks/baselines/{Path(args.holdout_suite).stem}.json")
 
     report = evaluate_suite(
         suite_name_or_path=args.suite,
@@ -177,8 +173,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     baseline_saved = False
     if args.save_baseline and (not args.strict or strict_success):
-        save_baseline(baseline_path, report)
-        baseline_saved = True
+        try:
+            save_baseline(baseline_path, report)
+        except ValueError as exc:
+            if args.strict:
+                raise
+            print(str(exc), file=sys.stderr)
+        else:
+            baseline_saved = True
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))

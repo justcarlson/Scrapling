@@ -123,6 +123,8 @@ Workload crashes and timeouts are reported as failed workloads in the JSON repor
 
 If `--save-baseline` is combined with `--strict`, the baseline is only written when the run satisfies strict acceptance.
 
+If `--save-baseline` is used without `--strict`, baseline rejections are reported to stderr and the evaluator still returns the benchmark report instead of crashing.
+
 If a baseline only covers part of the requested workload set, the evaluator marks the run as not baseline-comparable and leaves `srps` empty instead of emitting a subset-derived score.
 
 ## Files
@@ -139,14 +141,14 @@ benchmarks/
   baselines/
 ```
 
-Built-in benchmark assets are also shipped inside the `scrapling` package under `scrapling._benchmark_assets`. The evaluator uses those packaged assets for built-in suite names, so installed wheels do not depend on a source checkout layout.
+Built-in benchmark assets are also shipped inside the `scrapling` package under `scrapling._benchmark_assets`. In a source checkout, repo-local `benchmarks/` assets take precedence so local benchmark edits are picked up immediately. In install-like environments without the repo asset tree, the evaluator falls back to the packaged assets.
 
 The current implementation uses:
 
-- suite specs in `benchmarks/suites/`
-- workload specs in `benchmarks/workloads/`
-- deterministic HTML fixtures in `benchmarks/fixtures/static/`
-- expected outputs in `benchmarks/expected/`
+- suite specs from repo-local `benchmarks/suites/` in a checkout, otherwise `scrapling._benchmark_assets/suites/`
+- workload specs from repo-local `benchmarks/workloads/` in a checkout, otherwise `scrapling._benchmark_assets/workloads/`
+- deterministic HTML fixtures from repo-local `benchmarks/fixtures/...` when present, otherwise the packaged copies
+- expected outputs from repo-local `benchmarks/expected/` when present, otherwise the packaged copies
 
 When a holdout suite is provided, the final `srps` is multiplied by a `generalization_penalty`. If the holdout suite fails required correctness gates, the final score is zero.
 
@@ -168,9 +170,10 @@ Use the workload breakdown to diagnose why the score changed:
 - `extract_ms`: extraction stage
 - `correctness`: output fidelity
 - `stability`: run-to-run timing and output consistency
-- `baseline_comparable`: whether all scored workloads in that report had comparable baseline entries
 - `metrics_trace`: per-repetition timing, correctness, and normalized-output hashes for audit
 - `failure_kind`: `null`, `correctness`, `timeout`, `worker_error`, `worker_exit`, `worker_protocol_error`, or `environment_unavailable`
+
+`baseline_comparable` is reported at the top-level `summary` (and optional `summary.holdout`), not per workload.
 
 If `passed` is false, the score is intentionally zero. That is not a benchmark failure. It is the evaluator refusing to reward a functional regression.
 
