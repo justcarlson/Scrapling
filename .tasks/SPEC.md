@@ -67,6 +67,11 @@ Remote-processing rule
 - Most new JS-heavy capabilities should return text/JSON.
 - fetch_page_image is an explicit exception because the desired end product can be the image itself.
 
+Deployment rule
+- The fork itself is the source of truth for MCP image delivery.
+- Remote deployments should run core Scrapling MCP directly, not a separate custom bridge.
+- If a dedicated hostname such as `scrapling-vision` is kept, it should point at a compose-managed deployment of `scrapling mcp --http` built from the forked repo revision.
+
 First features to implement under this pattern
 1. list_page_images
 2. fetch_page_image

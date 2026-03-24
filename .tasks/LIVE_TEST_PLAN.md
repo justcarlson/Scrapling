@@ -1,5 +1,9 @@
 Scrapling live verification and end-to-end test plan
 
+Deployment note
+- The `scrapling-vision` endpoint should be a direct deployment of core Scrapling MCP from the forked repo.
+- Live MCP tests against `scrapling-vision` validate the built-in `list_page_images` and `fetch_page_image` tools, not a separate bridge implementation.
+
 Date baseline
 - Target verification was performed on March 21, 2026.
 - Verification used both `curl` and `agent-browser`.

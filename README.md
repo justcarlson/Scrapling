@@ -55,7 +55,7 @@ Scrapling is an adaptive Web Scraping framework that handles everything from a s
 
 > This fork adds MCP image-return tools for agent workflows on protected sites.
 >
-> It extends core Scrapling with `list_page_images` and `fetch_page_image`, so agents can receive actual image payloads from pages that require Scrapling's browser/fetcher path. If you want the standard framework without the MCP image additions, use the upstream `D4Vinci/Scrapling`.
+> It extends core Scrapling with `list_page_images` and `fetch_page_image`, so agents can receive actual image payloads from pages that require Scrapling's browser/fetcher path. These tools are part of the core MCP server in this fork, so no separate bridge service is required. If you want the standard framework without the MCP image additions, use the upstream `D4Vinci/Scrapling`.
 
 Its parser learns from website changes and automatically relocates your elements when pages update. Its fetchers bypass anti-bot systems like Cloudflare Turnstile out of the box. And its spider framework lets you scale up to concurrent, multi-session crawls with pause/resume and automatic proxy rotation — all in a few lines of Python. One library, zero compromises.
 
@@ -472,6 +472,8 @@ Scrapling's adaptive element finding capabilities significantly outperform alter
 
 
 > All benchmarks represent averages of 100+ runs. See [benchmarks.py](https://github.com/D4Vinci/Scrapling/blob/main/benchmarks.py) for methodology.
+
+For a repeatable Scrapling-only regression score, run [`scripts/perf_benchmark.py`](./scripts/perf_benchmark.py) and save a local baseline.
 
 ## Installation
 
